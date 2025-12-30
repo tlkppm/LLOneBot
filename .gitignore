@@ -1,0 +1,54 @@
+# Build outputs
+x64/
+Debug/
+Release/
+*.obj
+*.pdb
+*.iobj
+*.ipdb
+*.ilk
+*.exp
+*.lib
+*.exe
+*.dll
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.ncb
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.opendb
+LCHBOT/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Data files
+data/
+*.db
+*.sqlite
+
+# Config with secrets
+config.ini
+
+# Logs
+*.log
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Temp
+*.tmp
+*.temp
+*.bak

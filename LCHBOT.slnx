@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="LCHBOT.vcxproj" Id="296f0c63-94f3-4363-a5bc-bbcf92c81c91" />
+</Solution>
