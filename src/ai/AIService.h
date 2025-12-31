@@ -238,7 +238,7 @@ public:
     
 private:
     AIService() {
-        api_url_ = "https://api.jkyai.top/API/gemini2.5/index.php";
+        api_url_ = "";
         system_prompt_ = "";
     }
     
