@@ -80,6 +80,22 @@ public:
     }
     
     bool onGroupMessage(const MessageEvent& event) override {
+        std::string content = event.raw_message;
+        if (content.empty() || content.length() > 500) {
+            return false;
+        }
+        
+        if (content.find("[CQ:image") != std::string::npos ||
+            content.find("[CQ:face") != std::string::npos ||
+            content.find("[CQ:record") != std::string::npos) {
+            return false;
+        }
+        
+        std::string sender_name = event.sender.card.empty() ? event.sender.nickname : event.sender.card;
+        std::string context_key = "g_" + std::to_string(event.group_id);
+        
+        ContextDatabase::instance().addMessage(context_key, "user", content, sender_name, event.user_id);
+        
         return false;
     }
     

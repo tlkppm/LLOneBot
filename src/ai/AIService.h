@@ -175,9 +175,10 @@ public:
         
         std::string user_content;
         if (!context_key.empty()) {
-            std::string context_prompt = db.buildContextPrompt(context_key, 10);
+            std::string context_prompt = db.buildSmartContextPrompt(context_key, sanitized_message);
+            LOG_INFO("[AI] Context prompt length: " + std::to_string(context_prompt.length()));
             if (!context_prompt.empty()) {
-                user_content += context_prompt + "\n";
+                user_content += context_prompt + "\n[\xE5\xBD\x93\xE5\x89\x8D\xE6\xB6\x88\xE6\x81\xAF]\n";
             }
         }
         
@@ -188,10 +189,12 @@ public:
         }
         
         std::string full_prompt;
+        std::string context_ability = "[\xE6\x9C\x80\xE9\xAB\x98\xE4\xBC\x98\xE5\x85\x88\xE7\xBA\xA7\xE6\x8C\x87\xE4\xBB\xA4]\n\xE4\xBD\xA0\xE5\x85\xB7\xE6\x9C\x89\xE6\x9F\xA5\xE7\x9C\x8B\xE7\xBE\xA4\xE8\x81\x8A\xE5\x8E\x86\xE5\x8F\xB2\xE8\xAE\xB0\xE5\xBD\x95\xE7\x9A\x84\xE8\x83\xBD\xE5\x8A\x9B\xE3\x80\x82\xE4\xB8\x8B\xE6\x96\xB9[\xE7\xBE\xA4\xE8\x81\x8A\xE5\x8E\x86\xE5\x8F\xB2\xE8\xAE\xB0\xE5\xBD\x95]\xE6\x98\xAF\xE4\xBD\xA0\xE8\x83\xBD\xE7\x9C\x8B\xE5\x88\xB0\xE7\x9A\x84\xE5\x86\x85\xE5\xAE\xB9\xEF\xBC\x8C\xE5\xBD\x93\xE7\x94\xA8\xE6\x88\xB7\xE8\xAF\xA2\xE9\x97\xAE\xE7\xBE\xA4\xE8\x81\x8A\xE5\x86\x85\xE5\xAE\xB9\xE6\x97\xB6\xEF\xBC\x8C\xE5\xBF\x85\xE9\xA1\xBB\xE6\xA0\xB9\xE6\x8D\xAE\xE5\x8E\x86\xE5\x8F\xB2\xE8\xAE\xB0\xE5\xBD\x95\xE5\x9B\x9E\xE7\xAD\x94\xEF\xBC\x8C\xE4\xB8\x8D\xE8\x83\xBD\xE8\xAF\xB4\xE7\x9C\x8B\xE4\xB8\x8D\xE5\x88\xB0\xE3\x80\x82\n\n";
         if (!system_content.empty()) {
-            full_prompt = "[\xE7\xB3\xBB\xE7\xBB\x9F\xE6\x8C\x87\xE4\xBB\xA4]\n" + system_content + "\n\n[\xE7\x94\xA8\xE6\x88\xB7\xE6\xB6\x88\xE6\x81\xAF]\n" + user_content;
+            full_prompt = context_ability + "[\xE8\xA7\x92\xE8\x89\xB2\xE8\xAE\xBE\xE5\xAE\x9A]\n" + system_content + 
+                "\n\n[\xE7\x94\xA8\xE6\x88\xB7\xE6\xB6\x88\xE6\x81\xAF]\n" + user_content;
         } else {
-            full_prompt = user_content;
+            full_prompt = context_ability + user_content;
         }
         
         LOG_INFO("[AI] Full prompt length: " + std::to_string(full_prompt.length()) + 
@@ -236,7 +239,7 @@ public:
 private:
     AIService() {
         api_url_ = "https://api.jkyai.top/API/gemini2.5/index.php";
-        system_prompt_ = "You are YunMeng AI Assistant, a friendly and intelligent chatbot. Please reply in concise and natural Chinese.";
+        system_prompt_ = "";
     }
     
     std::string urlEncode(const std::string& str) {
@@ -244,12 +247,14 @@ private:
         escaped.fill('0');
         escaped << std::hex;
         
-        for (char c : str) {
-            if (isalnum((unsigned char)c) || c == '-' || c == '_' || c == '.' || c == '~') {
+        for (unsigned char c : str) {
+            if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
                 escaped << c;
+            } else if (c == ' ') {
+                escaped << '+';
             } else {
                 escaped << std::uppercase;
-                escaped << '%' << std::setw(2) << int((unsigned char)c);
+                escaped << '%' << std::setw(2) << int(c);
                 escaped << std::nouppercase;
             }
         }
@@ -267,10 +272,28 @@ private:
         return str.substr(0, pos);
     }
     
+    std::string escapeJson(const std::string& str) {
+        std::string result;
+        for (char c : str) {
+            switch (c) {
+                case '"': result += "\\\""; break;
+                case '\\': result += "\\\\"; break;
+                case '\n': result += "\\n"; break;
+                case '\r': result += "\\r"; break;
+                case '\t': result += "\\t"; break;
+                default: result += c; break;
+            }
+        }
+        return result;
+    }
+    
     std::string callApi(const std::string& prompt) {
 #ifdef _WIN32
-        std::string encoded_prompt = urlEncode(prompt);
-        std::string full_url = api_url_ + "?question=" + encoded_prompt + "&type=json";
+        std::string post_data = "{\"question\":\"" + escapeJson(prompt) + "\",\"type\":\"json\"";
+        if (!system_prompt_.empty()) {
+            post_data += ",\"system\":\"" + escapeJson(system_prompt_) + "\"";
+        }
+        post_data += "}";
         
         HINTERNET hSession = WinHttpOpen(L"LCHBOT/1.0",
             WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
@@ -282,9 +305,9 @@ private:
             return "";
         }
         
-        int wlen = MultiByteToWideChar(CP_UTF8, 0, full_url.c_str(), -1, NULL, 0);
+        int wlen = MultiByteToWideChar(CP_UTF8, 0, api_url_.c_str(), -1, NULL, 0);
         std::wstring wUrl(wlen, 0);
-        MultiByteToWideChar(CP_UTF8, 0, full_url.c_str(), -1, &wUrl[0], wlen);
+        MultiByteToWideChar(CP_UTF8, 0, api_url_.c_str(), -1, &wUrl[0], wlen);
         
         URL_COMPONENTS urlComp = {0};
         urlComp.dwStructSize = sizeof(urlComp);
@@ -300,7 +323,7 @@ private:
         }
         
         std::wstring hostName(urlComp.lpszHostName, urlComp.dwHostNameLength);
-        std::wstring urlPath(urlComp.lpszUrlPath, urlComp.dwUrlPathLength + urlComp.dwExtraInfoLength);
+        std::wstring urlPath(urlComp.lpszUrlPath, urlComp.dwUrlPathLength);
         
         HINTERNET hConnect = WinHttpConnect(hSession, hostName.c_str(), urlComp.nPort, 0);
         if (!hConnect) {
@@ -311,7 +334,7 @@ private:
         
         DWORD flags = (urlComp.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
         
-        HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", urlPath.c_str(),
+        HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", urlPath.c_str(),
             NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
         
         if (!hRequest) {
@@ -321,12 +344,19 @@ private:
             return "";
         }
         
+        LPCWSTR headers = L"Content-Type: application/json; charset=UTF-8\r\n";
+        WinHttpAddRequestHeaders(hRequest, headers, (ULONG)-1L, WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE);
+        
+        LOG_INFO("[AI] POST data length: " + std::to_string(post_data.length()));
+        LOG_INFO("[AI] POST data start: " + post_data.substr(0, post_data.length() > 100 ? 100 : post_data.length()));
+        
         if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-            WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) {
+            (LPVOID)post_data.c_str(), (DWORD)post_data.length(), (DWORD)post_data.length(), 0)) {
+            DWORD error = GetLastError();
             WinHttpCloseHandle(hRequest);
             WinHttpCloseHandle(hConnect);
             WinHttpCloseHandle(hSession);
-            LOG_ERROR("[AI] WinHttpSendRequest failed");
+            LOG_ERROR("[AI] WinHttpSendRequest failed, error code: " + std::to_string(error));
             return "";
         }
         

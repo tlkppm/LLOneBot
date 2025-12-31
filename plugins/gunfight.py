@@ -173,6 +173,9 @@ class GunfightPlugin(LCHBotPlugin):
         ]
         
         self.squads = {}
+        
+        self.battles_2v2 = {}
+        self.battle_schedules = {}
     
     def on_load(self):
         os.makedirs("data", exist_ok=True)
@@ -853,6 +856,25 @@ class GunfightPlugin(LCHBotPlugin):
         if msg in ["/解散小队", "/退出小队"]:
             return self.cmd_leave_squad(event, user_id, nickname, group_id)
         
+        if msg in ["/取消2v2", "/退出2v2"]:
+            return self.cmd_cancel_2v2(event, user_id, nickname, group_id)
+        
+        if msg in ["/2v2", "/创建2v2", "/组队对战"]:
+            return self.cmd_create_2v2(event, user_id, nickname, group_id)
+        
+        if msg in ["/加入2v2", "/参战"]:
+            return self.cmd_join_2v2(event, user_id, nickname, group_id)
+        
+        if msg in ["/开始2v2", "/开战"]:
+            return self.cmd_start_2v2(event, user_id, nickname, group_id)
+        
+        if msg.startswith("/定时2v2 "):
+            time_str = msg.replace("/定时2v2 ", "").strip()
+            return self.cmd_schedule_2v2(event, user_id, nickname, group_id, time_str)
+        
+        if msg in ["/2v2状态", "/对战状态"]:
+            return self.cmd_2v2_status(event, user_id, nickname, group_id)
+        
         target_match = re.search(r'/开枪\s*\[CQ:at,qq=(\d+)', raw)
         if not target_match:
             target_match = re.search(r'/对枪\s*\[CQ:at,qq=(\d+)', raw)
@@ -868,12 +890,11 @@ class GunfightPlugin(LCHBotPlugin):
         self.reply(event, """[三角洲行动 v3.0 全自动版]
 ================
 [摸金] /入场 - 自动完成整局摸金
-  > 自动搜索/遭遇敌人/NPC/BOSS
-  > 自动撤离/死亡结算
 [对枪] /开枪@人 /袭击@人
 [装备] /商店 /购买xxx /装备
 [任务] /任务 /接任务xxx
 [组队] /组队 /入队 /小队
+[2v2] /2v2 /加入2v2 /开战 /定时2v2
 [战绩] /战绩 /排行榜""")
         return True
     
@@ -2305,6 +2326,431 @@ K/D: {kd:.2f}
             self.save_data()
             self.reply(event, f"[已退出小队] 当前小队剩余 {len(squad['members'])} 人")
         return True
+    
+    def truncate_name(self, name, max_len=8):
+        if len(name) <= max_len:
+            return name
+        return name[:max_len-2] + ".."
+    
+    def cmd_create_2v2(self, event, user_id, nickname, group_id):
+        battle_id = f"{group_id}_2v2"
+        
+        if battle_id in self.battles_2v2:
+            battle = self.battles_2v2[battle_id]
+            total = len(battle["team_a"]) + len(battle["team_b"])
+            self.reply(event, f"[提示] 已有2v2对战等待中 ({total}/4人)\n使用 /加入2v2 参战")
+            return True
+        
+        self.battles_2v2[battle_id] = {
+            "team_a": [{"user_id": user_id, "nickname": self.truncate_name(nickname)}],
+            "team_b": [],
+            "group_id": group_id,
+            "creator": user_id,
+            "created_at": time.time(),
+            "scheduled_time": None
+        }
+        
+        img = self.generate_2v2_lobby_image(self.battles_2v2[battle_id])
+        if img:
+            self.reply(event, f"[CQ:image,file=base64://{img}]")
+        else:
+            self.reply(event, f"[2v2对战创建成功]\n队伍A: {self.truncate_name(nickname)}\n队伍B: 等待中\n使用 /加入2v2 参战")
+        return True
+    
+    def cmd_join_2v2(self, event, user_id, nickname, group_id):
+        battle_id = f"{group_id}_2v2"
+        
+        if battle_id not in self.battles_2v2:
+            self.reply(event, "[提示] 当前没有2v2对战, 使用 /2v2 创建")
+            return True
+        
+        battle = self.battles_2v2[battle_id]
+        
+        all_members = battle["team_a"] + battle["team_b"]
+        if any(m["user_id"] == user_id for m in all_members):
+            self.reply(event, "[提示] 你已经在对战中")
+            return True
+        
+        if len(all_members) >= 4:
+            self.reply(event, "[提示] 对战人数已满")
+            return True
+        
+        if len(battle["team_a"]) <= len(battle["team_b"]):
+            battle["team_a"].append({"user_id": user_id, "nickname": self.truncate_name(nickname)})
+            team_name = "A"
+        else:
+            battle["team_b"].append({"user_id": user_id, "nickname": self.truncate_name(nickname)})
+            team_name = "B"
+        
+        total = len(battle["team_a"]) + len(battle["team_b"])
+        
+        img = self.generate_2v2_lobby_image(battle)
+        if img:
+            self.reply(event, f"[CQ:image,file=base64://{img}]")
+        else:
+            self.reply(event, f"[加入成功] {self.truncate_name(nickname)} 加入队伍{team_name} ({total}/4)")
+        
+        if total == 4:
+            self.reply(event, "[人数已满] 队长可使用 /开战 开始对战, 或 /定时2v2 HH:MM 设置开始时间")
+        
+        return True
+    
+    def cmd_start_2v2(self, event, user_id, nickname, group_id):
+        battle_id = f"{group_id}_2v2"
+        
+        if battle_id not in self.battles_2v2:
+            self.reply(event, "[提示] 当前没有2v2对战")
+            return True
+        
+        battle = self.battles_2v2[battle_id]
+        
+        if battle["creator"] != user_id:
+            self.reply(event, "[提示] 只有创建者可以开始对战")
+            return True
+        
+        if len(battle["team_a"]) < 1 or len(battle["team_b"]) < 1:
+            self.reply(event, "[提示] 每队至少需要1人")
+            return True
+        
+        self.run_2v2_battle(event, battle, group_id)
+        del self.battles_2v2[battle_id]
+        return True
+    
+    def cmd_schedule_2v2(self, event, user_id, nickname, group_id, time_str):
+        battle_id = f"{group_id}_2v2"
+        
+        if battle_id not in self.battles_2v2:
+            self.reply(event, "[提示] 当前没有2v2对战")
+            return True
+        
+        battle = self.battles_2v2[battle_id]
+        
+        if battle["creator"] != user_id:
+            self.reply(event, "[提示] 只有创建者可以设置时间")
+            return True
+        
+        try:
+            parts = time_str.split(":")
+            hour, minute = int(parts[0]), int(parts[1])
+            now = time.localtime()
+            scheduled = time.mktime(time.struct_time((now.tm_year, now.tm_mon, now.tm_mday, hour, minute, 0, 0, 0, -1)))
+            if scheduled < time.time():
+                scheduled += 86400
+            battle["scheduled_time"] = scheduled
+            self.reply(event, f"[定时成功] 2v2对战将在 {hour:02d}:{minute:02d} 自动开始")
+        except:
+            self.reply(event, "[格式错误] 请使用 /定时2v2 HH:MM 格式")
+        return True
+    
+    def cmd_2v2_status(self, event, user_id, nickname, group_id):
+        battle_id = f"{group_id}_2v2"
+        
+        if battle_id not in self.battles_2v2:
+            self.reply(event, "[提示] 当前没有2v2对战")
+            return True
+        
+        battle = self.battles_2v2[battle_id]
+        img = self.generate_2v2_lobby_image(battle)
+        if img:
+            self.reply(event, f"[CQ:image,file=base64://{img}]")
+        else:
+            team_a = ", ".join([m["nickname"] for m in battle["team_a"]]) or "空"
+            team_b = ", ".join([m["nickname"] for m in battle["team_b"]]) or "空"
+            self.reply(event, f"[2v2对战状态]\n队伍A: {team_a}\n队伍B: {team_b}")
+        return True
+    
+    def cmd_cancel_2v2(self, event, user_id, nickname, group_id):
+        battle_id = f"{group_id}_2v2"
+        
+        if battle_id not in self.battles_2v2:
+            self.reply(event, "[提示] 当前没有2v2对战")
+            return True
+        
+        battle = self.battles_2v2[battle_id]
+        
+        if battle["creator"] != user_id:
+            self.reply(event, "[提示] 只有创建者可以取消对战")
+            return True
+        
+        del self.battles_2v2[battle_id]
+        self.reply(event, "[2v2对战已取消]")
+        return True
+    
+    def generate_2v2_lobby_image(self, battle):
+        if not HAS_PIL:
+            return None
+        try:
+            img = Image.new('RGB', (500, 280), color=(25, 30, 40))
+            draw = ImageDraw.Draw(img)
+            
+            try:
+                font_title = ImageFont.truetype("msyh.ttc", 26)
+                font_team = ImageFont.truetype("msyh.ttc", 18)
+                font_name = ImageFont.truetype("msyh.ttc", 16)
+            except:
+                font_title = ImageFont.load_default()
+                font_team = font_title
+                font_name = font_title
+            
+            draw.text((250, 25), "2v2 组队对战", fill=(255, 200, 50), font=font_title, anchor="mm")
+            draw.line((30, 50, 470, 50), fill=(100, 100, 100), width=1)
+            
+            draw.rectangle([30, 70, 230, 200], fill=(40, 50, 35), outline=(100, 200, 100), width=2)
+            draw.text((130, 90), "队伍 A", fill=(100, 255, 100), font=font_team, anchor="mm")
+            
+            for i, m in enumerate(battle["team_a"][:2]):
+                y = 120 + i * 35
+                avatar_path = self.download_avatar(m["user_id"])
+                if avatar_path and os.path.exists(avatar_path):
+                    avatar = Image.open(avatar_path).resize((30, 30))
+                    mask = Image.new('L', (30, 30), 0)
+                    ImageDraw.Draw(mask).ellipse((0, 0, 30, 30), fill=255)
+                    img.paste(avatar, (50, y - 15), mask)
+                draw.text((90, y), m["nickname"][:8], fill=(200, 255, 200), font=font_name, anchor="lm")
+            
+            for i in range(len(battle["team_a"]), 2):
+                y = 120 + i * 35
+                draw.text((90, y), "等待中...", fill=(100, 100, 100), font=font_name, anchor="lm")
+            
+            draw.rectangle([270, 70, 470, 200], fill=(50, 35, 35), outline=(200, 100, 100), width=2)
+            draw.text((370, 90), "队伍 B", fill=(255, 100, 100), font=font_team, anchor="mm")
+            
+            for i, m in enumerate(battle["team_b"][:2]):
+                y = 120 + i * 35
+                avatar_path = self.download_avatar(m["user_id"])
+                if avatar_path and os.path.exists(avatar_path):
+                    avatar = Image.open(avatar_path).resize((30, 30))
+                    mask = Image.new('L', (30, 30), 0)
+                    ImageDraw.Draw(mask).ellipse((0, 0, 30, 30), fill=255)
+                    img.paste(avatar, (290, y - 15), mask)
+                draw.text((330, y), m["nickname"][:8], fill=(255, 200, 200), font=font_name, anchor="lm")
+            
+            for i in range(len(battle["team_b"]), 2):
+                y = 120 + i * 35
+                draw.text((330, y), "等待中...", fill=(100, 100, 100), font=font_name, anchor="lm")
+            
+            draw.text((250, 145), "VS", fill=(255, 215, 0), font=font_title, anchor="mm")
+            
+            total = len(battle["team_a"]) + len(battle["team_b"])
+            status = f"人数: {total}/4"
+            if battle.get("scheduled_time"):
+                st = time.localtime(battle["scheduled_time"])
+                status += f" | 开始时间: {st.tm_hour:02d}:{st.tm_min:02d}"
+            draw.text((250, 230), status, fill=(180, 180, 180), font=font_name, anchor="mm")
+            
+            draw.text((250, 260), "/加入2v2 参战 | /开战 开始", fill=(120, 120, 120), font=font_name, anchor="mm")
+            
+            buffer = BytesIO()
+            img.save(buffer, format='PNG')
+            return base64.b64encode(buffer.getvalue()).decode()
+        except Exception as e:
+            print(f"[2v2] Lobby image error: {e}")
+            return None
+    
+    def run_2v2_battle(self, event, battle, group_id):
+        team_a = battle["team_a"]
+        team_b = battle["team_b"]
+        
+        events = []
+        team_a_hp = {m["user_id"]: 100 for m in team_a}
+        team_b_hp = {m["user_id"]: 100 for m in team_b}
+        
+        events.append({"type": "start", "team_a": team_a, "team_b": team_b})
+        
+        round_num = 0
+        max_rounds = 10
+        
+        while round_num < max_rounds:
+            round_num += 1
+            
+            alive_a = [m for m in team_a if team_a_hp[m["user_id"]] > 0]
+            alive_b = [m for m in team_b if team_b_hp[m["user_id"]] > 0]
+            
+            if not alive_a or not alive_b:
+                break
+            
+            attacker = random.choice(alive_a + alive_b)
+            
+            if attacker in alive_a:
+                target = random.choice(alive_b)
+                damage = random.randint(20, 50)
+                team_b_hp[target["user_id"]] -= damage
+                events.append({
+                    "type": "attack",
+                    "attacker": attacker,
+                    "target": target,
+                    "damage": damage,
+                    "target_hp": max(0, team_b_hp[target["user_id"]]),
+                    "attacker_team": "A"
+                })
+            else:
+                target = random.choice(alive_a)
+                damage = random.randint(20, 50)
+                team_a_hp[target["user_id"]] -= damage
+                events.append({
+                    "type": "attack",
+                    "attacker": attacker,
+                    "target": target,
+                    "damage": damage,
+                    "target_hp": max(0, team_a_hp[target["user_id"]]),
+                    "attacker_team": "B"
+                })
+        
+        alive_a = [m for m in team_a if team_a_hp[m["user_id"]] > 0]
+        alive_b = [m for m in team_b if team_b_hp[m["user_id"]] > 0]
+        
+        if len(alive_a) > len(alive_b):
+            winner = "A"
+            winner_team = team_a
+        elif len(alive_b) > len(alive_a):
+            winner = "B"
+            winner_team = team_b
+        else:
+            total_hp_a = sum(team_a_hp.values())
+            total_hp_b = sum(team_b_hp.values())
+            winner = "A" if total_hp_a >= total_hp_b else "B"
+            winner_team = team_a if winner == "A" else team_b
+        
+        events.append({"type": "end", "winner": winner, "winner_team": winner_team, "team_a_hp": team_a_hp, "team_b_hp": team_b_hp})
+        
+        for m in winner_team:
+            player = self.get_player(m["user_id"])
+            player["wins"] += 1
+            player["kills"] += 1
+        
+        loser_team = team_b if winner == "A" else team_a
+        for m in loser_team:
+            player = self.get_player(m["user_id"])
+            player["deaths"] += 1
+        
+        self.save_data()
+        
+        gif = self.generate_2v2_battle_gif(events, team_a, team_b)
+        if gif:
+            self.reply(event, f"[CQ:image,file=base64://{gif}]")
+        else:
+            winner_names = ", ".join([m["nickname"] for m in winner_team])
+            self.reply(event, f"[2v2对战结束]\n获胜队伍: {winner}\n队员: {winner_names}")
+    
+    def generate_2v2_battle_gif(self, events, team_a, team_b):
+        if not HAS_PIL:
+            return None
+        try:
+            width, height = 520, 320
+            frames = []
+            
+            try:
+                font_title = ImageFont.truetype("msyh.ttc", 24)
+                font_info = ImageFont.truetype("msyh.ttc", 16)
+                font_name = ImageFont.truetype("msyh.ttc", 14)
+            except:
+                font_title = ImageFont.load_default()
+                font_info = font_title
+                font_name = font_title
+            
+            def draw_teams(draw, img, team_a, team_b, hp_a, hp_b):
+                draw.text((130, 30), "队伍A", fill=(100, 255, 100), font=font_info, anchor="mm")
+                draw.text((390, 30), "队伍B", fill=(255, 100, 100), font=font_info, anchor="mm")
+                
+                for i, m in enumerate(team_a[:2]):
+                    y = 60 + i * 50
+                    hp = hp_a.get(m["user_id"], 100)
+                    avatar_path = self.download_avatar(m["user_id"])
+                    if avatar_path and os.path.exists(avatar_path):
+                        avatar = Image.open(avatar_path).resize((40, 40))
+                        if hp <= 0:
+                            avatar = avatar.convert('L').convert('RGB')
+                        mask = Image.new('L', (40, 40), 0)
+                        ImageDraw.Draw(mask).ellipse((0, 0, 40, 40), fill=255)
+                        img.paste(avatar, (30, y), mask)
+                    
+                    name_color = (150, 150, 150) if hp <= 0 else (200, 255, 200)
+                    draw.text((80, y + 10), m["nickname"][:6], fill=name_color, font=font_name, anchor="lm")
+                    
+                    hp_color = (100, 100, 100) if hp <= 0 else (100, 255, 100)
+                    hp_width = max(0, int(80 * hp / 100))
+                    draw.rectangle([80, y + 25, 160, y + 35], fill=(50, 50, 50))
+                    draw.rectangle([80, y + 25, 80 + hp_width, y + 35], fill=hp_color)
+                    draw.text((170, y + 30), f"{max(0,hp)}", fill=hp_color, font=font_name, anchor="lm")
+                
+                for i, m in enumerate(team_b[:2]):
+                    y = 60 + i * 50
+                    hp = hp_b.get(m["user_id"], 100)
+                    avatar_path = self.download_avatar(m["user_id"])
+                    if avatar_path and os.path.exists(avatar_path):
+                        avatar = Image.open(avatar_path).resize((40, 40))
+                        if hp <= 0:
+                            avatar = avatar.convert('L').convert('RGB')
+                        mask = Image.new('L', (40, 40), 0)
+                        ImageDraw.Draw(mask).ellipse((0, 0, 40, 40), fill=255)
+                        img.paste(avatar, (450, y), mask)
+                    
+                    name_color = (150, 150, 150) if hp <= 0 else (255, 200, 200)
+                    draw.text((440, y + 10), m["nickname"][:6], fill=name_color, font=font_name, anchor="rm")
+                    
+                    hp_color = (100, 100, 100) if hp <= 0 else (255, 100, 100)
+                    hp_width = max(0, int(80 * hp / 100))
+                    draw.rectangle([360, y + 25, 440, y + 35], fill=(50, 50, 50))
+                    draw.rectangle([360, y + 25, 360 + hp_width, y + 35], fill=hp_color)
+                    draw.text((350, y + 30), f"{max(0,hp)}", fill=hp_color, font=font_name, anchor="rm")
+            
+            hp_a = {m["user_id"]: 100 for m in team_a}
+            hp_b = {m["user_id"]: 100 for m in team_b}
+            
+            for evt in events:
+                if evt["type"] == "start":
+                    for _ in range(3):
+                        img = Image.new('RGB', (width, height), color=(25, 30, 40))
+                        draw = ImageDraw.Draw(img)
+                        draw_teams(draw, img, team_a, team_b, hp_a, hp_b)
+                        draw.text((260, 200), "2v2 对战开始!", fill=(255, 215, 0), font=font_title, anchor="mm")
+                        draw.text((260, 240), "VS", fill=(255, 100, 50), font=font_title, anchor="mm")
+                        frames.append(img.copy())
+                
+                elif evt["type"] == "attack":
+                    if evt["attacker_team"] == "A":
+                        hp_b[evt["target"]["user_id"]] = evt["target_hp"]
+                    else:
+                        hp_a[evt["target"]["user_id"]] = evt["target_hp"]
+                    
+                    for _ in range(2):
+                        img = Image.new('RGB', (width, height), color=(25, 30, 40))
+                        draw = ImageDraw.Draw(img)
+                        draw_teams(draw, img, team_a, team_b, hp_a, hp_b)
+                        
+                        atk_name = evt["attacker"]["nickname"][:6]
+                        tgt_name = evt["target"]["nickname"][:6]
+                        dmg = evt["damage"]
+                        
+                        draw.text((260, 200), f"{atk_name} 攻击 {tgt_name}", fill=(255, 200, 100), font=font_info, anchor="mm")
+                        draw.text((260, 230), f"-{dmg} HP", fill=(255, 80, 80), font=font_title, anchor="mm")
+                        
+                        if evt["target_hp"] <= 0:
+                            draw.text((260, 270), f"{tgt_name} 阵亡!", fill=(255, 50, 50), font=font_info, anchor="mm")
+                        
+                        frames.append(img.copy())
+                
+                elif evt["type"] == "end":
+                    for _ in range(4):
+                        img = Image.new('RGB', (width, height), color=(25, 30, 40))
+                        draw = ImageDraw.Draw(img)
+                        draw_teams(draw, img, team_a, team_b, hp_a, hp_b)
+                        
+                        winner = evt["winner"]
+                        winner_color = (100, 255, 100) if winner == "A" else (255, 100, 100)
+                        draw.text((260, 200), f"队伍 {winner} 获胜!", fill=winner_color, font=font_title, anchor="mm")
+                        
+                        winner_names = ", ".join([m["nickname"][:6] for m in evt["winner_team"]])
+                        draw.text((260, 250), winner_names, fill=(255, 215, 0), font=font_info, anchor="mm")
+                        
+                        frames.append(img.copy())
+            
+            buffer = BytesIO()
+            frames[0].save(buffer, format='GIF', save_all=True, append_images=frames[1:], duration=500, loop=0)
+            return base64.b64encode(buffer.getvalue()).decode()
+        except Exception as e:
+            print(f"[2v2] Battle GIF error: {e}")
+            return None
 
 plugin = GunfightPlugin()
 register_plugin(plugin)

@@ -70,7 +70,7 @@ public:
         
         messages_.push_back(msg);
         
-        compressContext(context_key, 50);
+        compressContext(context_key, 500);
         
         saveToFile();
     }
@@ -109,6 +109,70 @@ public:
         }
         return prompt;
     }
+    
+    std::string buildSmartContextPrompt(const std::string& context_key, const std::string& current_query) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        
+        std::vector<ContextMessage> all_messages;
+        for (const auto& msg : messages_) {
+            if (msg.context_key == context_key) {
+                all_messages.push_back(msg);
+            }
+        }
+        
+        if (all_messages.empty()) {
+            return "";
+        }
+        
+        size_t start = all_messages.size() > 50 ? all_messages.size() - 50 : 0;
+        
+        std::string prompt = "[群聊历史记录]\n";
+        for (size_t i = start; i < all_messages.size(); i++) {
+            prompt += formatMessage(all_messages[i]) + "\n";
+        }
+        
+        return prompt;
+    }
+    
+private:
+    bool hasKeywordMatch(const std::string& content, const std::string& query) {
+        if (query.length() < 2) return false;
+        
+        std::vector<std::string> keywords;
+        std::string word;
+        for (char c : query) {
+            if (c == ' ' || c == '\n' || c == '\t') {
+                if (word.length() >= 2) {
+                    keywords.push_back(word);
+                }
+                word.clear();
+            } else {
+                word += c;
+            }
+        }
+        if (word.length() >= 2) {
+            keywords.push_back(word);
+        }
+        
+        for (const auto& kw : keywords) {
+            if (content.find(kw) != std::string::npos) {
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    std::string formatMessage(const ContextMessage& msg) {
+        if (msg.role == "user") {
+            if (!msg.sender_name.empty()) {
+                return msg.sender_name + ": " + msg.content;
+            }
+            return "User: " + msg.content;
+        }
+        return "Assistant: " + msg.content;
+    }
+    
+public:
     
     void clearContext(const std::string& context_key) {
         std::lock_guard<std::mutex> lock(mutex_);
