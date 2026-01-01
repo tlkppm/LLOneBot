@@ -216,9 +216,8 @@ class AstrBotPluginLoader(LCHBotPlugin):
                 print(f"[AstrBotLoader] Background error for {cmd}: {e}")
                 traceback.print_exc()
         
-        t = threading.Thread(target=run_in_thread)
+        t = threading.Thread(target=run_in_thread, daemon=False)
         t.start()
-        t.join(timeout=300)
     
     def on_message(self, event):
         raw_msg = event.get("raw_message", "").strip()

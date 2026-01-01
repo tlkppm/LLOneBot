@@ -22,6 +22,7 @@
 #include <thread>
 #include <chrono>
 #include "../core/GroupMemberCache.h"
+#include "../core/FileMessageQueue.h"
 
 namespace LCHBOT {
 
@@ -121,6 +122,14 @@ public:
         
         initialized_ = true;
         LOG_INFO("LCHBOT initialized successfully");
+        
+        lchbot::FileMessageQueue::instance().setSendGroupCallback([this](const std::string& msg, int64_t group_id) {
+            if (api_) api_->sendGroupMsg(group_id, msg);
+        });
+        lchbot::FileMessageQueue::instance().setSendPrivateCallback([this](const std::string& msg, int64_t user_id) {
+            if (api_) api_->sendPrivateMsg(user_id, msg);
+        });
+        lchbot::FileMessageQueue::instance().start();
         
         AdminApi::instance().initialize();
         if (AdminServer::instance().start(config.admin_port > 0 ? config.admin_port : 8080)) {
