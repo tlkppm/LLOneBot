@@ -126,27 +126,26 @@ class TouchiTools:
         """获取群成员昵称映射，带缓存机制"""
         current_time = time.time()
         
-        # 检查缓存是否有效（10分钟过期）
+        # 检查缓存是否有效（10分钟过期）且非空
         if (group_id in self.nickname_cache and 
             group_id in self.cache_expire_time and 
-            current_time < self.cache_expire_time[group_id]):
+            current_time < self.cache_expire_time[group_id] and
+            len(self.nickname_cache[group_id]) > 0):
             return self.nickname_cache[group_id]
         
         nickname_map = {}
         
         try:
-            # 直接使用event.bot获取群成员列表
             members = await event.bot.get_group_member_list(group_id=int(group_id))
             
-            # 创建昵称映射字典
             for member in members:
                 user_id = str(member['user_id'])
                 nickname = member.get('card') or member.get('nickname') or f"用户{user_id[:6]}"
                 nickname_map[user_id] = nickname
             
-            # 更新缓存
-            self.nickname_cache[group_id] = nickname_map
-            self.cache_expire_time[group_id] = current_time + 600  # 10分钟后过期
+            if len(nickname_map) > 0:
+                self.nickname_cache[group_id] = nickname_map
+                self.cache_expire_time[group_id] = current_time + 600
             
             logger.info(f"成功获取群{group_id}的{len(nickname_map)}个成员昵称")
             

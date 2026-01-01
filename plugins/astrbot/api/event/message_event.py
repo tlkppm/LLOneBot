@@ -69,6 +69,42 @@ class MessageResult:
         self.content = content
         self.event = event
 
+import json as _json
+
+def _get_member_cache():
+    try:
+        import builtins
+        cache_str = getattr(builtins, '_lchbot_member_cache', '{}')
+        return _json.loads(cache_str) if cache_str else {}
+    except:
+        return {}
+
+class AstrBotApi:
+    def __init__(self, raw_event):
+        self._raw_event = raw_event
+    
+    async def get_group_member_info(self, group_id, user_id, no_cache=False):
+        group_id_str = str(group_id)
+        user_id_str = str(user_id)
+        nickname = f"用户{user_id_str[:6]}"
+        cache = _get_member_cache()
+        if group_id_str in cache:
+            nickname = cache[group_id_str].get(user_id_str, nickname)
+        return {
+            "user_id": user_id,
+            "nickname": nickname,
+            "card": "",
+            "group_id": group_id
+        }
+    
+    async def get_group_member_list(self, group_id):
+        group_id_str = str(group_id)
+        cache = _get_member_cache()
+        if group_id_str in cache:
+            return [{"user_id": int(uid), "nickname": nick, "card": nick} 
+                    for uid, nick in cache[group_id_str].items()]
+        return []
+
 class AstrMessageEvent:
     def __init__(self, raw_event=None):
         self._raw_event = raw_event or {}
@@ -81,6 +117,7 @@ class AstrMessageEvent:
         self.is_wake = True
         self.is_at_or_wake_command = True
         self.call_llm = False
+        self.bot = AstrBotApi(self._raw_event)
         if self._raw_event.get("sender", {}).get("role") in ["owner", "admin"]:
             self.role = "admin"
     

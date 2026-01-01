@@ -99,17 +99,34 @@ private:
                         }
                         std::string hex = json.substr(pos + 1, 4);
                         int codepoint = std::stoi(hex, nullptr, 16);
+                        pos += 4;
+                        
+                        if (codepoint >= 0xD800 && codepoint <= 0xDBFF) {
+                            if (pos + 3 < json.size() && json[pos + 1] == '\\' && json[pos + 2] == 'u') {
+                                std::string hex2 = json.substr(pos + 3, 4);
+                                int low = std::stoi(hex2, nullptr, 16);
+                                if (low >= 0xDC00 && low <= 0xDFFF) {
+                                    codepoint = 0x10000 + ((codepoint - 0xD800) << 10) + (low - 0xDC00);
+                                    pos += 6;
+                                }
+                            }
+                        }
+                        
                         if (codepoint < 0x80) {
                             result += static_cast<char>(codepoint);
                         } else if (codepoint < 0x800) {
                             result += static_cast<char>(0xC0 | (codepoint >> 6));
                             result += static_cast<char>(0x80 | (codepoint & 0x3F));
-                        } else {
+                        } else if (codepoint < 0x10000) {
                             result += static_cast<char>(0xE0 | (codepoint >> 12));
                             result += static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
                             result += static_cast<char>(0x80 | (codepoint & 0x3F));
+                        } else {
+                            result += static_cast<char>(0xF0 | (codepoint >> 18));
+                            result += static_cast<char>(0x80 | ((codepoint >> 12) & 0x3F));
+                            result += static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
+                            result += static_cast<char>(0x80 | (codepoint & 0x3F));
                         }
-                        pos += 4;
                         break;
                     }
                     default:
@@ -281,7 +298,9 @@ private:
     
     static std::string escapeString(const std::string& s) {
         std::string result;
-        for (char c : s) {
+        result.reserve(s.size());
+        for (size_t i = 0; i < s.size(); ++i) {
+            unsigned char c = static_cast<unsigned char>(s[i]);
             switch (c) {
                 case '"': result += "\\\""; break;
                 case '\\': result += "\\\\"; break;
@@ -291,12 +310,12 @@ private:
                 case '\r': result += "\\r"; break;
                 case '\t': result += "\\t"; break;
                 default:
-                    if (static_cast<unsigned char>(c) < 0x20) {
+                    if (c < 0x20) {
                         char buf[8];
-                        std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned char>(c));
+                        std::snprintf(buf, sizeof(buf), "\\u%04x", c);
                         result += buf;
                     } else {
-                        result += c;
+                        result += s[i];
                     }
             }
         }

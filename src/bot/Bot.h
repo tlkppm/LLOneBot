@@ -21,6 +21,7 @@
 #include <atomic>
 #include <thread>
 #include <chrono>
+#include "../core/GroupMemberCache.h"
 
 namespace LCHBOT {
 
@@ -277,6 +278,8 @@ private:
                     if (msg_event->isGroup()) {
                         LOG_MSG("[Group:" + std::to_string(msg_event->group_id) + "] " + sender_name + "(" + std::to_string(msg_event->user_id) + "): " + msg_event->raw_message);
                         
+                        fetchGroupMembersIfNeeded(msg_event->group_id);
+                        
                         std::string context_key = "g_" + std::to_string(msg_event->group_id);
                         ContextDatabase::instance().addMessage(
                             context_key, 
@@ -318,6 +321,39 @@ private:
         } catch (const std::exception& e) {
             LOG_ERROR("Failed to handle message: " + std::string(e.what()));
         }
+    }
+    
+    void fetchGroupMembersIfNeeded(int64_t group_id) {
+        auto& cache = GroupMemberCache::instance();
+        if (cache.hasGroup(group_id) || cache.isPending(group_id)) return;
+        
+        cache.markPending(group_id);
+        
+        std::map<std::string, JsonValue> params;
+        params["group_id"] = JsonValue(group_id);
+        
+        api_->callApiWithCallback("get_group_member_list", JsonValue(params),
+            [group_id](const ApiResponse& member_resp) {
+                if (member_resp.retcode != 0 || !member_resp.data.isArray()) return;
+                
+                std::vector<std::pair<int64_t, std::string>> members;
+                for (const auto& member : member_resp.data.asArray()) {
+                    if (!member.isObject()) continue;
+                    auto& m = member.asObject();
+                    int64_t uid = m.count("user_id") ? m.at("user_id").asInt() : 0;
+                    std::string nick = "";
+                    if (m.count("card") && !m.at("card").asString().empty()) {
+                        nick = m.at("card").asString();
+                    } else if (m.count("nickname")) {
+                        nick = m.at("nickname").asString();
+                    }
+                    if (uid > 0 && !nick.empty()) {
+                        members.emplace_back(uid, nick);
+                    }
+                }
+                GroupMemberCache::instance().setMembers(group_id, members);
+                LOG_INFO("[Bot] Cached " + std::to_string(members.size()) + " members for group " + std::to_string(group_id));
+            });
     }
     
     std::unique_ptr<WebSocketClient> ws_client_;

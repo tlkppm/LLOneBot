@@ -28,6 +28,7 @@
 #include <sstream>
 #include <iomanip>
 #include <cstring>
+#include "../core/Logger.h"
 
 namespace LCHBOT {
 
@@ -103,11 +104,14 @@ public:
     void disconnect() {
         running_ = false;
         
-        if (socket_ != INVALID_SOCKET) {
-            std::vector<uint8_t> close_frame = encodeFrame("", 0x08, true);
-            ::send(socket_, (const char*)close_frame.data(), (int)close_frame.size(), 0);
-            closesocket(socket_);
-            socket_ = INVALID_SOCKET;
+        {
+            std::lock_guard<std::mutex> lock(send_mutex_);
+            if (socket_ != INVALID_SOCKET) {
+                std::vector<uint8_t> close_frame = encodeFrame("", 0x08, true);
+                ::send(socket_, (const char*)close_frame.data(), (int)close_frame.size(), 0);
+                closesocket(socket_);
+                socket_ = INVALID_SOCKET;
+            }
         }
         
         if (recv_thread_.joinable()) {
@@ -116,10 +120,17 @@ public:
     }
     
     void send(const std::string& message) {
-        if (socket_ == INVALID_SOCKET) return;
+        std::lock_guard<std::mutex> lock(send_mutex_);
+        if (socket_ == INVALID_SOCKET) {
+            LOG_WARN("[WebSocket] Send failed: socket invalid");
+            return;
+        }
         
         std::vector<uint8_t> frame = encodeFrame(message, 0x01, true);
-        ::send(socket_, (const char*)frame.data(), (int)frame.size(), 0);
+        int sent = ::send(socket_, (const char*)frame.data(), (int)frame.size(), 0);
+        if (sent < 0) {
+            LOG_ERROR("[WebSocket] Send error: " + std::to_string(sent));
+        }
     }
     
     bool isConnected() const { return running_ && socket_ != INVALID_SOCKET; }
@@ -178,27 +189,37 @@ private:
     }
     
     void recvLoop() {
-        std::vector<uint8_t> buffer(65536);
+        std::vector<uint8_t> buffer(1024 * 1024);
+        std::vector<uint8_t> pending_data;
         
         while (running_) {
             int received = recv(socket_, (char*)buffer.data(), (int)buffer.size(), 0);
             
             if (received <= 0) {
+                LOG_WARN("[WebSocket] recv returned " + std::to_string(received) + ", errno=" + std::to_string(WSAGetLastError()));
                 break;
             }
             
+            pending_data.insert(pending_data.end(), buffer.begin(), buffer.begin() + received);
+            
             size_t offset = 0;
-            while (offset < (size_t)received) {
-                auto [opcode, payload, consumed] = decodeFrame(buffer.data() + offset, received - offset);
+            while (offset < pending_data.size()) {
+                auto [opcode, payload, consumed] = decodeFrame(pending_data.data() + offset, pending_data.size() - offset);
                 if (consumed == 0) break;
                 
                 offset += consumed;
                 
                 if (opcode == 0x08) {
+                    LOG_WARN("[WebSocket] Received close frame from server");
                     goto disconnect_label;
                 } else if (opcode == 0x09) {
                     std::vector<uint8_t> pong_frame = encodeFrame(payload, 0x0A, true);
-                    ::send(socket_, (const char*)pong_frame.data(), (int)pong_frame.size(), 0);
+                    {
+                        std::lock_guard<std::mutex> lock(send_mutex_);
+                        if (socket_ != INVALID_SOCKET) {
+                            ::send(socket_, (const char*)pong_frame.data(), (int)pong_frame.size(), 0);
+                        }
+                    }
                 } else if (opcode == 0x01 || opcode == 0x02) {
                     if (on_message_) {
                         std::string msg_copy = payload;
@@ -207,6 +228,10 @@ private:
                         }).detach();
                     }
                 }
+            }
+            
+            if (offset > 0) {
+                pending_data.erase(pending_data.begin(), pending_data.begin() + offset);
             }
         }
         
@@ -314,6 +339,7 @@ private:
     std::atomic<bool> running_;
     SOCKET socket_;
     std::thread recv_thread_;
+    mutable std::mutex send_mutex_;
     
     std::string host_;
     uint16_t port_;

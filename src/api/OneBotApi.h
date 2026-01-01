@@ -2,6 +2,7 @@
 
 #include "../core/Types.h"
 #include "../core/JsonParser.h"
+#include "../core/Logger.h"
 #include <string>
 #include <map>
 #include <functional>
@@ -359,7 +360,9 @@ private:
         request["echo"] = JsonValue(echo);
         
         if (send_func_) {
-            send_func_(JsonParser::stringify(JsonValue(request)));
+            std::string json = JsonParser::stringify(JsonValue(request));
+            LOG_INFO("[OneBotApi] Sending: " + json.substr(0, 300));
+            send_func_(json);
         }
         
         return echo;
