@@ -14,6 +14,7 @@ struct PluginInfo {
     std::string version;
     std::string author;
     std::string description;
+    std::string icon;
     int priority = 0;
 };
 

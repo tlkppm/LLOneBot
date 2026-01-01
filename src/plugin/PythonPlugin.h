@@ -3,12 +3,19 @@
 #include "Plugin.h"
 #include "../core/JsonParser.h"
 #include "../core/Config.h"
+#include "../api/OneBotApi.h"
 #include <string>
 #include <vector>
 #include <fstream>
 #include <sstream>
 #include <filesystem>
 #include <cstdlib>
+#include <thread>
+#include <mutex>
+#include <queue>
+#include <condition_variable>
+#include <atomic>
+#include <functional>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -16,6 +23,104 @@
 #endif
 
 namespace LCHBOT {
+
+struct PythonTask {
+    std::string plugin_name;
+    std::string event_json;
+    std::function<void(const std::string&, int64_t)> send_group_callback;
+    std::function<void(const std::string&, int64_t)> send_private_callback;
+};
+
+class OneBotApi;
+
+class PythonPipelineScheduler {
+public:
+    static PythonPipelineScheduler& instance() {
+        static PythonPipelineScheduler inst;
+        return inst;
+    }
+    
+    void setApi(OneBotApi* api) { api_ = api; }
+    OneBotApi* getApi() { return api_; }
+    
+    void start(int num_workers = 4) {
+        if (running_) return;
+        running_ = true;
+        
+        for (int i = 0; i < num_workers; ++i) {
+            workers_.emplace_back([this, i] { workerLoop(i); });
+        }
+        
+        result_processor_ = std::thread([this] { resultProcessorLoop(); });
+        
+        LOG_INFO("[PythonPipeline] Started with " + std::to_string(num_workers) + " workers");
+    }
+    
+    void stop() {
+        {
+            std::lock_guard<std::mutex> lock(task_mutex_);
+            running_ = false;
+        }
+        task_cv_.notify_all();
+        result_cv_.notify_all();
+        
+        for (auto& w : workers_) {
+            if (w.joinable()) w.join();
+        }
+        if (result_processor_.joinable()) result_processor_.join();
+        workers_.clear();
+    }
+    
+    void submitTask(PythonTask task) {
+        {
+            std::lock_guard<std::mutex> lock(task_mutex_);
+            task_queue_.push(std::move(task));
+        }
+        task_cv_.notify_one();
+    }
+    
+    size_t pendingTasks() const {
+        std::lock_guard<std::mutex> lock(task_mutex_);
+        return task_queue_.size();
+    }
+    
+private:
+    struct PipelineResult {
+        std::string action;
+        std::string message;
+        int64_t target_id;
+        std::function<void(const std::string&, int64_t)> callback;
+    };
+    
+    PythonPipelineScheduler() = default;
+    ~PythonPipelineScheduler() { stop(); }
+    
+    void workerLoop(int worker_id);
+    void resultProcessorLoop();
+    
+    void enqueueResult(PipelineResult result) {
+        {
+            std::lock_guard<std::mutex> lock(result_mutex_);
+            result_queue_.push(std::move(result));
+        }
+        result_cv_.notify_one();
+    }
+    
+    mutable std::mutex task_mutex_;
+    std::condition_variable task_cv_;
+    std::queue<PythonTask> task_queue_;
+    
+    std::mutex result_mutex_;
+    std::condition_variable result_cv_;
+    std::queue<PipelineResult> result_queue_;
+    
+    std::vector<std::thread> workers_;
+    std::thread result_processor_;
+    std::atomic<bool> running_{false};
+    OneBotApi* api_ = nullptr;
+};
+
+using PythonTaskQueue = PythonPipelineScheduler;
 
 class PythonInterpreter {
 public:
@@ -265,6 +370,13 @@ private:
     }
     
 public:
+    void* saveThread() {
+        return PyEval_SaveThread ? PyEval_SaveThread() : nullptr;
+    }
+    
+    void restoreThread(void* state) {
+        if (PyEval_RestoreThread && state) PyEval_RestoreThread(state);
+    }
     
 private:
     PythonInterpreter() = default;
@@ -472,23 +584,27 @@ public:
             "_lchbot_tmp_version = ''\n"
             "_lchbot_tmp_author = ''\n"
             "_lchbot_tmp_desc = ''\n"
+            "_lchbot_tmp_icon = ''\n"
             "if '" + info_.name + "' in _lchbot_plugins:\n"
             "    _p = _lchbot_plugins['" + info_.name + "']\n"
             "    _lchbot_tmp_name = str(getattr(_p, 'name', ''))\n"
             "    _lchbot_tmp_version = str(getattr(_p, 'version', '1.0.0'))\n"
             "    _lchbot_tmp_author = str(getattr(_p, 'author', 'Unknown'))\n"
-            "    _lchbot_tmp_desc = str(getattr(_p, 'description', ''))\n";
+            "    _lchbot_tmp_desc = str(getattr(_p, 'description', ''))\n"
+            "    _lchbot_tmp_icon = str(getattr(_p, 'icon', ''))\n";
         py.executeString(get_info_code);
         
         std::string name = py.getGlobalString("_lchbot_tmp_name");
         std::string version = py.getGlobalString("_lchbot_tmp_version");
         std::string author = py.getGlobalString("_lchbot_tmp_author");
         std::string desc = py.getGlobalString("_lchbot_tmp_desc");
+        std::string icon = py.getGlobalString("_lchbot_tmp_icon");
         
         if (!name.empty()) info_.name = name;
         if (!version.empty()) info_.version = version;
         if (!author.empty()) info_.author = author;
         if (!desc.empty()) info_.description = desc;
+        if (!icon.empty()) info_.icon = icon;
     }
     
     void onUnload() override {
@@ -527,32 +643,19 @@ public:
         
         try {
             std::string event_json = createEventJson(event);
-            std::string escaped_json = escapeForPython(event_json);
             
-            auto& py = PythonInterpreter::instance();
-            
-            std::string code = 
-                "import json\n"
-                "_lchbot_reply_queue = []\n"
-                "try:\n"
-                "    _lchbot_event = json.loads(" + escaped_json + ")\n"
-                "    if '" + info_.name + "' in _lchbot_plugins:\n"
-                "        _lchbot_result = _lchbot_plugins['" + info_.name + "'].on_message(_lchbot_event) or False\n"
-                "except Exception as e:\n"
-                "    import traceback\n"
-                "    print(f'[Plugin:" + info_.name + "] {traceback.format_exc()}')\n";
-            
-            py.executeString(code);
-            
-            if (context_) {
-                auto replies = getReplyQueue();
-                for (const auto& reply : replies) {
-                    if (reply.is_group) {
-                        context_->getApi()->sendGroupMsg(reply.target_id, reply.message);
-                    } else {
-                        context_->getApi()->sendPrivateMsg(reply.target_id, reply.message);
-                    }
-                }
+            if (context_ && context_->getApi()) {
+                auto* api = context_->getApi();
+                PythonTask task;
+                task.plugin_name = info_.name;
+                task.event_json = event_json;
+                task.send_group_callback = [api](const std::string& msg, int64_t gid) {
+                    api->sendGroupMsg(gid, msg);
+                };
+                task.send_private_callback = [api](const std::string& msg, int64_t uid) {
+                    api->sendPrivateMsg(uid, msg);
+                };
+                PythonTaskQueue::instance().submitTask(std::move(task));
             }
         } catch (...) {
         }
@@ -718,5 +821,118 @@ private:
     bool loaded_ = false;
     PluginContext* context_ = nullptr;
 };
+
+inline void PythonPipelineScheduler::workerLoop(int worker_id) {
+    while (true) {
+        PythonTask task;
+        {
+            std::unique_lock<std::mutex> lock(task_mutex_);
+            task_cv_.wait(lock, [this] { return !running_ || !task_queue_.empty(); });
+            if (!running_ && task_queue_.empty()) return;
+            task = std::move(task_queue_.front());
+            task_queue_.pop();
+        }
+        
+        try {
+            auto& py = PythonInterpreter::instance();
+            std::string escaped_json = "\"";
+            for (char c : task.event_json) {
+                if (c == '\\') escaped_json += "\\\\";
+                else if (c == '"') escaped_json += "\\\"";
+                else if (c == '\n') escaped_json += "\\n";
+                else if (c == '\r') escaped_json += "\\r";
+                else if (c == '\t') escaped_json += "\\t";
+                else escaped_json += c;
+            }
+            escaped_json += "\"";
+            
+            std::string code = 
+                "import json\n"
+                "_lchbot_reply_queue = []\n"
+                "try:\n"
+                "    _lchbot_event = json.loads(" + escaped_json + ")\n"
+                "    if '" + task.plugin_name + "' in _lchbot_plugins:\n"
+                "        _lchbot_plugins['" + task.plugin_name + "'].on_message(_lchbot_event)\n"
+                "except Exception as e:\n"
+                "    import traceback\n"
+                "    print(f'[Pipeline:" + task.plugin_name + "] {traceback.format_exc()}')\n";
+            
+            py.executeString(code);
+            
+            auto processQueue = [&]() {
+                std::string get_code = 
+                    "import json\n"
+                    "_lchbot_async_reply_json = json.dumps(_lchbot_reply_queue) if _lchbot_reply_queue else '[]'\n"
+                    "_lchbot_reply_queue = []\n";
+                py.executeString(get_code);
+                std::string json_str = py.getGlobalString("_lchbot_async_reply_json");
+                if (!json_str.empty() && json_str != "[]") {
+                    JsonValue arr = JsonParser::parse(json_str);
+                    if (arr.isArray()) {
+                        for (const auto& item : arr.asArray()) {
+                            if (item.isObject()) {
+                                auto& obj = item.asObject();
+                                std::string action = obj.count("action") ? obj.at("action").asString() : "";
+                                int64_t target_id = obj.count("group_id") ? obj.at("group_id").asInt() : 
+                                                  (obj.count("user_id") ? obj.at("user_id").asInt() : 0);
+                                std::string message = obj.count("message") ? obj.at("message").asString() : "";
+                                if (target_id > 0 && !message.empty()) {
+                                    PipelineResult result;
+                                    result.action = action;
+                                    result.message = message;
+                                    result.target_id = target_id;
+                                    if (action == "send_group_msg") {
+                                        result.callback = task.send_group_callback;
+                                    } else {
+                                        result.callback = task.send_private_callback;
+                                    }
+                                    enqueueResult(std::move(result));
+                                }
+                            }
+                        }
+                    }
+                    return true;
+                }
+                return false;
+            };
+            
+            for (int poll = 0; poll < 600; ++poll) {
+                processQueue();
+                
+                {
+                    std::unique_lock<std::mutex> lock(task_mutex_);
+                    if (!task_queue_.empty()) break;
+                }
+                
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+        } catch (const std::exception& e) {
+            LOG_ERROR("[PythonPipeline] Worker " + std::to_string(worker_id) + " exception: " + std::string(e.what()));
+        } catch (...) {
+            LOG_ERROR("[PythonPipeline] Worker " + std::to_string(worker_id) + " unknown exception");
+        }
+    }
+}
+
+inline void PythonPipelineScheduler::resultProcessorLoop() {
+    while (true) {
+        PipelineResult result;
+        {
+            std::unique_lock<std::mutex> lock(result_mutex_);
+            result_cv_.wait(lock, [this] { return !running_ || !result_queue_.empty(); });
+            if (!running_ && result_queue_.empty()) return;
+            result = std::move(result_queue_.front());
+            result_queue_.pop();
+        }
+        
+        try {
+            if (result.callback && result.target_id > 0 && !result.message.empty()) {
+                result.callback(result.message, result.target_id);
+            }
+        } catch (const std::exception& e) {
+            LOG_ERROR("[PythonPipeline] Result processor exception: " + std::string(e.what()));
+        }
+    }
+}
 
 }

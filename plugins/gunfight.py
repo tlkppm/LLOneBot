@@ -134,16 +134,18 @@ class GunfightPlugin(LCHBotPlugin):
         ]
         
         self.raid_events = [
-            {"type": "loot", "weight": 30, "desc": "发现战利品"},
-            {"type": "enemy", "weight": 20, "desc": "遭遇敌人"},
+            {"type": "loot", "weight": 25, "desc": "发现战利品"},
+            {"type": "enemy", "weight": 18, "desc": "遭遇敌人"},
             {"type": "npc", "weight": 10, "desc": "遇到NPC"},
-            {"type": "trap", "weight": 8, "desc": "触发陷阱"},
+            {"type": "trap", "weight": 5, "desc": "触发陷阱"},
             {"type": "treasure", "weight": 4, "desc": "发现宝藏"},
-            {"type": "ambush", "weight": 5, "desc": "遭遇埋伏"},
+            {"type": "ambush", "weight": 4, "desc": "遭遇埋伏"},
             {"type": "rescue", "weight": 4, "desc": "发现倒地队友"},
-            {"type": "heal_self", "weight": 8, "desc": "自我治疗"},
+            {"type": "heal_self", "weight": 10, "desc": "自我治疗"},
             {"type": "use_skill", "weight": 6, "desc": "使用技能"},
-            {"type": "explore", "weight": 5, "desc": "探索区域"},
+            {"type": "explore", "weight": 6, "desc": "探索区域"},
+            {"type": "stealth", "weight": 4, "desc": "潜行通过"},
+            {"type": "loot_body", "weight": 4, "desc": "搜刮尸体"},
         ]
         
         self.equipment = [
@@ -239,6 +241,17 @@ class GunfightPlugin(LCHBotPlugin):
         if "buff" not in p: p["buff"] = None
         if "buff_duration" not in p: p["buff_duration"] = 0
         return p
+    
+    def _calculate_armor_value(self, player):
+        total_defense = 0
+        equipped = player.get("equipped", {})
+        for slot in ["armor", "helmet"]:
+            eq_id = equipped.get(slot)
+            if eq_id:
+                eq = next((e for e in self.equipment if e["id"] == eq_id), None)
+                if eq and eq.get("defense"):
+                    total_defense += eq["defense"]
+        return total_defense
     
     def check_mission_progress(self, player, action_type, value):
         if not player.get("mission"):
@@ -1062,7 +1075,7 @@ K/D: {kd:.2f}
             p["hp"] = 100 + member_class["hp_bonus"]
             p["raids"] += 1
             p["squad"] = f"raid_{user_id}"
-            p["armor_value"] = 0
+            p["armor_value"] = self._calculate_armor_value(p)
             p["skill_cooldown"] = 0
             p["buff"] = None
             p["buff_duration"] = 0
@@ -1072,7 +1085,7 @@ K/D: {kd:.2f}
         player["raid_loot"] = []
         player["hp"] = base_hp
         player["raids"] += 1
-        player["armor_value"] = 0
+        player["armor_value"] = self._calculate_armor_value(player)
         player["skill_cooldown"] = 0
         player["buff"] = None
         player["buff_duration"] = 0
@@ -1108,7 +1121,7 @@ K/D: {kd:.2f}
         loot_value = sum(l["value"] for l in player["raid_loot"])
         
         if player["hp"] > 0:
-            extract_chance = 70 + (player["hp"] // 5)
+            extract_chance = 85 + (player["hp"] // 10)
             success = random.randint(1, 100) <= extract_chance
             
             if success:
@@ -1168,19 +1181,30 @@ K/D: {kd:.2f}
             
         elif event_type == "enemy":
             enemy = random.choice(self.enemies)
-            player_attack = random.randint(30, 60)
-            enemy_attack = enemy["attack"] * random.randint(1, 3)
+            weapon_bonus = 0
+            equipped_weapon = player.get("equipped", {}).get("weapon")
+            if equipped_weapon:
+                weapon_item = next((e for e in self.equipment if e["id"] == equipped_weapon), None)
+                if weapon_item:
+                    weapon_bonus = weapon_item.get("attack", 0)
+            player_attack = random.randint(30, 60) + weapon_bonus
+            
+            armor_reduction = player.get("armor_value", 0) // 3
+            enemy_attack = max(5, enemy["attack"] * random.randint(1, 2) - armor_reduction)
+            
+            player["hp"] -= enemy_attack
+            result["damage"] = enemy_attack
             
             if player_attack >= enemy["hp"]:
                 player["raid_loot"].append({"name": f"击杀{enemy['name']}", "value": enemy["reward"], "rarity": "common"})
                 result["victory"] = True
                 result["reward"] = enemy["reward"]
             else:
-                player["hp"] -= enemy_attack
                 result["victory"] = False
-                result["damage"] = enemy_attack
-                if player["hp"] <= 0:
-                    result["dead"] = True
+                result["enemy_hp_left"] = enemy["hp"] - player_attack
+            
+            if player["hp"] <= 0:
+                result["dead"] = True
             result["enemy"] = enemy
             result["hp"] = player["hp"]
             
@@ -1201,7 +1225,9 @@ K/D: {kd:.2f}
             result["hp"] = player["hp"]
             
         elif event_type == "trap":
-            damage = int(random.randint(10, 30) * map_data["danger"])
+            base_damage = random.randint(5, 15)
+            armor_reduction = player.get("armor_value", 0) // 5
+            damage = max(5, int(base_damage * (1 + map_data["danger"] * 0.2)) - armor_reduction)
             player["hp"] -= damage
             result["damage"] = damage
             result["hp"] = player["hp"]
@@ -1326,6 +1352,37 @@ K/D: {kd:.2f}
                 result["value"] = value
             result["hp"] = player["hp"]
         
+        elif event_type == "stealth":
+            stealth_results = [
+                {"msg": "悄无声息地绕过敌人巡逻", "bonus_hp": 5},
+                {"msg": "利用掩体成功潜行", "bonus_hp": 0},
+                {"msg": "躲在暗处等待敌人离开", "bonus_hp": 10},
+                {"msg": "使用消音器悄悄前进", "bonus_hp": 0, "value": 500},
+            ]
+            stealth = random.choice(stealth_results)
+            result["stealth"] = stealth
+            result["msg"] = stealth["msg"]
+            if stealth.get("bonus_hp"):
+                player["hp"] = min(100, player["hp"] + stealth["bonus_hp"])
+                result["heal"] = stealth["bonus_hp"]
+            if stealth.get("value"):
+                player["raid_loot"].append({"name": "潜行奖励", "value": stealth["value"], "rarity": "common"})
+                result["value"] = stealth["value"]
+            result["hp"] = player["hp"]
+        
+        elif event_type == "loot_body":
+            body_loots = [
+                {"name": "敌人遗落的钱包", "value": random.randint(800, 2500), "rarity": "common"},
+                {"name": "军用狗牌", "value": random.randint(1500, 4000), "rarity": "rare"},
+                {"name": "加密U盘", "value": random.randint(3000, 8000), "rarity": "rare"},
+                {"name": "敌军装备", "value": random.randint(2000, 5000), "rarity": "common"},
+            ]
+            body_loot = random.choice(body_loots)
+            player["raid_loot"].append(body_loot)
+            result["loot"] = body_loot
+            result["total"] = sum(l["value"] for l in player["raid_loot"])
+            result["hp"] = player["hp"]
+        
         if player.get("skill_cooldown", 0) > 0:
             player["skill_cooldown"] -= 1
         
@@ -1395,6 +1452,15 @@ K/D: {kd:.2f}
                 font_small = font_title
                 font_big = font_title
             
+            squad_avatars = []
+            if squad_members and len(squad_members) > 1:
+                for m in squad_members[:4]:
+                    m_avatar_path = self.download_avatar(m["user_id"])
+                    m_avatar = None
+                    if m_avatar_path and os.path.exists(m_avatar_path):
+                        m_avatar = Image.open(m_avatar_path).resize((35, 35))
+                    squad_avatars.append({"user_id": m["user_id"], "nickname": m["nickname"], "avatar": m_avatar})
+            
             avatar_path = self.download_avatar(user_id)
             avatar_img = None
             avatar_mask = None
@@ -1411,10 +1477,17 @@ K/D: {kd:.2f}
                 hp_color = (100, 255, 100) if current_hp > 50 else (255, 200, 50) if current_hp > 25 else (255, 80, 80)
                 draw.text((85, 40), f"HP: {max(0, current_hp)}", fill=hp_color, font=font_small)
                 
-                if squad_count > 1:
-                    draw.text((150, 40), f"小队: {squad_count}人", fill=(100, 200, 255), font=font_small)
+                if squad_count > 1 and squad_avatars:
+                    draw.text((width - 150, 10), "小队成员:", fill=(100, 200, 255), font=font_small)
+                    small_mask = Image.new('L', (35, 35), 0)
+                    ImageDraw.Draw(small_mask).ellipse((0, 0, 35, 35), fill=255)
+                    for i, sa in enumerate(squad_avatars[:4]):
+                        x_pos = width - 150 + i * 40
+                        if sa["avatar"]:
+                            img.paste(sa["avatar"], (x_pos, 25), small_mask)
+                        draw.text((x_pos + 17, 62), sa["nickname"][:3], fill=(180, 180, 180), font=font_small, anchor="mm")
                 
-                draw.text((width - 120, 25), map_name[:8], fill=(150, 150, 150), font=font_small)
+                draw.text((width - 60, 10), map_name[:8], fill=(150, 150, 150), font=font_small)
                 
                 hp_bar_x, hp_bar_y = 85, 58
                 hp_bar_w, hp_bar_h = 150, 8
@@ -1809,6 +1882,47 @@ K/D: {kd:.2f}
                         
                         if value > 0:
                             draw.text((width // 2, 300), f"+${value:,}", fill=(255, 215, 0), font=font_small, anchor="mm")
+                        
+                        frames.append(img.copy())
+                
+                elif evt["type"] == "stealth":
+                    msg = evt.get("msg", "潜行成功")
+                    heal = evt.get("heal", 0)
+                    value = evt.get("value", 0)
+                    
+                    for stealth_frame in range(5):
+                        alpha = 180 + stealth_frame * 15
+                        img = Image.new('RGB', (width, height), color=(20, 25, 30))
+                        draw = ImageDraw.Draw(img)
+                        draw_base_frame(draw, img, current_hp, map_name, loot_so_far)
+                        
+                        self._draw_event_log(draw, displayed_events[:-1], rarity_colors, font_event, width)
+                        
+                        draw.text((width // 2, 220), "潜行", fill=(100, 150, 200), font=font_title, anchor="mm")
+                        draw.text((width // 2, 260), msg, fill=(150, 180, 200), font=font_event, anchor="mm")
+                        
+                        if heal > 0:
+                            draw.text((width // 2, 295), f"+{heal} HP", fill=(100, 255, 100), font=font_small, anchor="mm")
+                        if value > 0:
+                            draw.text((width // 2, 315), f"+${value:,}", fill=(255, 215, 0), font=font_small, anchor="mm")
+                        
+                        frames.append(img.copy())
+                
+                elif evt["type"] == "loot_body":
+                    loot = evt.get("loot", {})
+                    total = evt.get("total", 0)
+                    loot_color = rarity_colors.get(loot.get("rarity", "common"), (150, 150, 150))
+                    
+                    for body_frame in range(5):
+                        img = Image.new('RGB', (width, height), color=(30, 25, 25))
+                        draw = ImageDraw.Draw(img)
+                        draw_base_frame(draw, img, current_hp, map_name, loot_so_far)
+                        
+                        self._draw_event_log(draw, displayed_events[:-1], rarity_colors, font_event, width)
+                        
+                        draw.text((width // 2, 220), "搜刮尸体", fill=(200, 150, 100), font=font_title, anchor="mm")
+                        draw.text((width // 2, 260), loot.get("name", "物资"), fill=loot_color, font=font_event, anchor="mm")
+                        draw.text((width // 2, 295), f"+${loot.get('value', 0):,}", fill=(255, 215, 0), font=font_small, anchor="mm")
                         
                         frames.append(img.copy())
                 
@@ -2558,7 +2672,15 @@ K/D: {kd:.2f}
         events.append({"type": "start", "team_a": team_a, "team_b": team_b})
         
         round_num = 0
-        max_rounds = 10
+        max_rounds = 12
+        
+        battle_items = [
+            {"name": "手雷", "damage": 25, "msg": "投掷手雷"},
+            {"name": "燃烧瓶", "damage": 20, "msg": "扔出燃烧瓶"},
+            {"name": "医疗包", "heal": 30, "msg": "使用医疗包"},
+            {"name": "肾上腺素", "heal": 15, "msg": "注射肾上腺素"},
+            {"name": "闪光弹", "stun": True, "msg": "投掷闪光弹"},
+        ]
         
         while round_num < max_rounds:
             round_num += 1
@@ -2569,7 +2691,43 @@ K/D: {kd:.2f}
             if not alive_a or not alive_b:
                 break
             
+            if random.randint(1, 100) <= 20:
+                item = random.choice(battle_items)
+                user = random.choice(alive_a + alive_b)
+                is_team_a = user in alive_a
+                
+                if item.get("heal"):
+                    hp_dict = team_a_hp if is_team_a else team_b_hp
+                    old_hp = hp_dict[user["user_id"]]
+                    hp_dict[user["user_id"]] = min(100, old_hp + item["heal"])
+                    events.append({
+                        "type": "item",
+                        "user": user,
+                        "item": item["name"],
+                        "msg": item["msg"],
+                        "heal": item["heal"],
+                        "user_hp": hp_dict[user["user_id"]],
+                        "user_team": "A" if is_team_a else "B"
+                    })
+                elif item.get("damage"):
+                    targets = alive_b if is_team_a else alive_a
+                    target = random.choice(targets)
+                    hp_dict = team_b_hp if is_team_a else team_a_hp
+                    hp_dict[target["user_id"]] -= item["damage"]
+                    events.append({
+                        "type": "item",
+                        "user": user,
+                        "target": target,
+                        "item": item["name"],
+                        "msg": item["msg"],
+                        "damage": item["damage"],
+                        "target_hp": max(0, hp_dict[target["user_id"]]),
+                        "user_team": "A" if is_team_a else "B"
+                    })
+                continue
+            
             attacker = random.choice(alive_a + alive_b)
+            weapon = random.choice(self.weapons)
             
             if attacker in alive_a:
                 target = random.choice(alive_b)
@@ -2580,6 +2738,7 @@ K/D: {kd:.2f}
                     "attacker": attacker,
                     "target": target,
                     "damage": damage,
+                    "weapon": weapon,
                     "target_hp": max(0, team_b_hp[target["user_id"]]),
                     "attacker_team": "A"
                 })
@@ -2592,6 +2751,7 @@ K/D: {kd:.2f}
                     "attacker": attacker,
                     "target": target,
                     "damage": damage,
+                    "weapon": weapon,
                     "target_hp": max(0, team_a_hp[target["user_id"]]),
                     "attacker_team": "B"
                 })
@@ -2721,12 +2881,43 @@ K/D: {kd:.2f}
                         atk_name = evt["attacker"]["nickname"][:6]
                         tgt_name = evt["target"]["nickname"][:6]
                         dmg = evt["damage"]
+                        weapon = evt.get("weapon", "武器")
                         
-                        draw.text((260, 200), f"{atk_name} 攻击 {tgt_name}", fill=(255, 200, 100), font=font_info, anchor="mm")
-                        draw.text((260, 230), f"-{dmg} HP", fill=(255, 80, 80), font=font_title, anchor="mm")
+                        draw.text((260, 180), f"{atk_name} [{weapon}]", fill=(255, 200, 100), font=font_info, anchor="mm")
+                        draw.text((260, 210), f"攻击 {tgt_name}", fill=(200, 200, 200), font=font_info, anchor="mm")
+                        draw.text((260, 245), f"-{dmg} HP", fill=(255, 80, 80), font=font_title, anchor="mm")
                         
                         if evt["target_hp"] <= 0:
-                            draw.text((260, 270), f"{tgt_name} 阵亡!", fill=(255, 50, 50), font=font_info, anchor="mm")
+                            draw.text((260, 285), f"{tgt_name} 阵亡!", fill=(255, 50, 50), font=font_info, anchor="mm")
+                        
+                        frames.append(img.copy())
+                
+                elif evt["type"] == "item":
+                    if evt.get("damage"):
+                        hp_dict = hp_b if evt["user_team"] == "A" else hp_a
+                        hp_dict[evt["target"]["user_id"]] = evt["target_hp"]
+                    elif evt.get("heal"):
+                        hp_dict = hp_a if evt["user_team"] == "A" else hp_b
+                        hp_dict[evt["user"]["user_id"]] = evt["user_hp"]
+                    
+                    for _ in range(2):
+                        img = Image.new('RGB', (width, height), color=(25, 30, 40))
+                        draw = ImageDraw.Draw(img)
+                        draw_teams(draw, img, team_a, team_b, hp_a, hp_b)
+                        
+                        user_name = evt["user"]["nickname"][:6]
+                        item_name = evt["item"]
+                        
+                        if evt.get("heal"):
+                            draw.text((260, 190), f"{user_name} {evt['msg']}", fill=(100, 255, 150), font=font_info, anchor="mm")
+                            draw.text((260, 230), f"+{evt['heal']} HP", fill=(100, 255, 100), font=font_title, anchor="mm")
+                        elif evt.get("damage"):
+                            tgt_name = evt["target"]["nickname"][:6]
+                            draw.text((260, 180), f"{user_name} {evt['msg']}", fill=(255, 150, 50), font=font_info, anchor="mm")
+                            draw.text((260, 210), f"命中 {tgt_name}", fill=(200, 200, 200), font=font_info, anchor="mm")
+                            draw.text((260, 245), f"-{evt['damage']} HP", fill=(255, 80, 80), font=font_title, anchor="mm")
+                            if evt["target_hp"] <= 0:
+                                draw.text((260, 285), f"{tgt_name} 阵亡!", fill=(255, 50, 50), font=font_info, anchor="mm")
                         
                         frames.append(img.copy())
                 

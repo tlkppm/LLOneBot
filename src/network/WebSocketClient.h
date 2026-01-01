@@ -200,7 +200,12 @@ private:
                     std::vector<uint8_t> pong_frame = encodeFrame(payload, 0x0A, true);
                     ::send(socket_, (const char*)pong_frame.data(), (int)pong_frame.size(), 0);
                 } else if (opcode == 0x01 || opcode == 0x02) {
-                    if (on_message_) on_message_(payload);
+                    if (on_message_) {
+                        std::string msg_copy = payload;
+                        std::thread([this, msg_copy]() {
+                            on_message_(msg_copy);
+                        }).detach();
+                    }
                 }
             }
         }

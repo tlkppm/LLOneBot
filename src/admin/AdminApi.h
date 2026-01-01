@@ -102,6 +102,7 @@ private:
             json << "\"version\":\"" << escapeJson(info.version) << "\",";
             json << "\"author\":\"" << escapeJson(info.author) << "\",";
             json << "\"description\":\"" << escapeJson(info.description) << "\",";
+            json << "\"icon\":\"" << escapeJson(info.icon) << "\",";
             json << "\"enabled\":" << (mgr.isPluginEnabled(info.name) ? "true" : "false");
             json << "}";
         }

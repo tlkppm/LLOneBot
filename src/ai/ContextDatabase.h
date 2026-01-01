@@ -70,7 +70,7 @@ public:
         
         messages_.push_back(msg);
         
-        compressContext(context_key, 500);
+        compressContext(context_key, 2000);
         
         saveToFile();
     }
@@ -124,11 +124,24 @@ public:
             return "";
         }
         
-        size_t start = all_messages.size() > 50 ? all_messages.size() - 50 : 0;
+        size_t max_messages = 200;
+        size_t max_chars = 15000;
         
-        std::string prompt = "[群聊历史记录]\n";
+        size_t start = all_messages.size() > max_messages ? all_messages.size() - max_messages : 0;
+        
+        std::string prompt = "[\xE7\xBE\xA4\xE8\x81\x8A\xE5\x8E\x86\xE5\x8F\xB2\xE8\xAE\xB0\xE5\xBD\x95] (\xE5\x85\xB1" + std::to_string(all_messages.size()) + "\xE6\x9D\xA1\xE6\xB6\x88\xE6\x81\xAF\xEF\xBC\x8C\xE6\x98\xBE\xE7\xA4\xBA\xE6\x9C\x80\xE8\xBF\x91" + std::to_string(all_messages.size() - start) + "\xE6\x9D\xA1)\n";
+        
         for (size_t i = start; i < all_messages.size(); i++) {
-            prompt += formatMessage(all_messages[i]) + "\n";
+            std::string msg_str = formatMessage(all_messages[i]) + "\n";
+            if (prompt.length() + msg_str.length() > max_chars) {
+                prompt = "[\xE7\xBE\xA4\xE8\x81\x8A\xE5\x8E\x86\xE5\x8F\xB2\xE8\xAE\xB0\xE5\xBD\x95] (\xE5\x86\x85\xE5\xAE\xB9\xE8\xBF\x87\xE5\xA4\x9A\xEF\xBC\x8C\xE5\xB7\xB2\xE6\x88\xAA\xE6\x96\xAD\xE6\x98\xBE\xE7\xA4\xBA\xE6\x9C\x80\xE8\xBF\x91\xE9\x83\xA8\xE5\x88\x86)\n";
+                size_t new_start = i + (all_messages.size() - i) / 2;
+                for (size_t j = new_start; j < all_messages.size(); j++) {
+                    prompt += formatMessage(all_messages[j]) + "\n";
+                }
+                break;
+            }
+            prompt += msg_str;
         }
         
         return prompt;
@@ -186,7 +199,7 @@ public:
         saveToFile();
     }
     
-    void cleanupOldContexts(int64_t max_age_seconds = 86400) {
+    void cleanupOldContexts(int64_t max_age_seconds = 604800) {
         std::lock_guard<std::mutex> lock(mutex_);
         
         int64_t now = std::chrono::duration_cast<std::chrono::seconds>(

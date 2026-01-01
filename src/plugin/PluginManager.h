@@ -402,12 +402,17 @@ public:
             if (!plugin->isEnabled()) continue;
             
             try {
-                if (plugin->onMessage(event)) return true;
-                
-                if (event.isPrivate()) {
-                    if (plugin->onPrivateMessage(event)) return true;
+                bool is_python = dynamic_cast<PythonPlugin*>(plugin) != nullptr;
+                if (is_python) {
+                    plugin->onMessage(event);
                 } else {
-                    if (plugin->onGroupMessage(event)) return true;
+                    if (plugin->onMessage(event)) return true;
+                    
+                    if (event.isPrivate()) {
+                        if (plugin->onPrivateMessage(event)) return true;
+                    } else {
+                        if (plugin->onGroupMessage(event)) return true;
+                    }
                 }
             } catch (...) {
                 LOG_ERROR("Exception in plugin: " + plugin->getInfo().name);

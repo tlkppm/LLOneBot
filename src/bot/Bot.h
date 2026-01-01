@@ -59,6 +59,7 @@ public:
                 LOG_WARN("Failed to initialize Python interpreter, Python plugins will be disabled");
             } else {
                 LOG_INFO("Python interpreter initialized");
+                PythonTaskQueue::instance().start(4);
             }
         }
         
@@ -66,6 +67,7 @@ public:
         PersonalitySystem::instance().initialize();
         
         api_ = std::make_unique<OneBotApi>();
+        PythonTaskQueue::instance().setApi(api_.get());
         context_ = std::make_unique<PluginContext>(api_.get());
         
         auto& plugin_mgr = PluginManager::instance();
