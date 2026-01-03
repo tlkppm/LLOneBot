@@ -125,6 +125,8 @@ private:
                 "  /clear - \xE6\xB8\x85\xE9\x99\xA4\xE4\xB8\x8A\xE4\xB8\x8B\xE6\x96\x87\n"
                 "  /persona - \xE6\x9F\xA5\xE7\x9C\x8B\xE4\xBA\xBA\xE6\xA0\xBC\n"
                 "  /persona <id> - \xE5\x88\x87\xE6\x8D\xA2\xE4\xBA\xBA\xE6\xA0\xBC\n"
+                "  /model - \xE6\x9F\xA5\xE7\x9C\x8B\xE6\xA8\xA1\xE5\x9E\x8B(\xE7\xAE\xA1\xE7\x90\x86\xE5\x91\x98)\n"
+                "  /model <id> - \xE5\x88\x87\xE6\x8D\xA2\xE6\xA8\xA1\xE5\x9E\x8B(\xE7\xAE\xA1\xE7\x90\x86\xE5\x91\x98)\n"
                 "  /about - \xE5\x85\xB3\xE4\xBA\x8E\n"
                 "\n\xE8\x81\x8A\xE5\xA4\xA9\xEF\xBC\x9A@\xE6\x9C\xBA\xE5\x99\xA8\xE4\xBA\xBA \xE6\xB6\x88\xE6\x81\xAF";
             replyTo(event, help_text);
@@ -202,13 +204,45 @@ private:
                 "=== \xE5\x85\xB3\xE4\xBA\x8E " + current_name + " ===\n"
                 "LCHBOT QQ\xE6\x9C\xBA\xE5\x99\xA8\xE4\xBA\xBA\xE6\xA1\x86\xE6\x9E\xB6\n"
                 "OneBot 11\xE5\x8D\x8F\xE8\xAE\xAE\n"
-                "AI\xE5\xBC\x95\xE6\x93\x8E\xEF\xBC\x9AGemini-2.5\n"
+                "AI\xE5\xBC\x95\xE6\x93\x8E\xEF\xBC\x9A" + AIService::instance().getCurrentModelName() + "\n"
                 "\xE4\xBC\x81\xE4\xB8\x9A\xE7\xBA\xA7\xE4\xBA\xBA\xE6\xA0\xBC\xE7\xB3\xBB\xE7\xBB\x9F";
             replyTo(event, about_text);
             return true;
         }
         
+        if (cmd == "/model") {
+            if (!isAdmin(event.user_id)) {
+                replyTo(event, "\xE6\x9D\x83\xE9\x99\x90\xE4\xB8\x8D\xE8\xB6\xB3\xEF\xBC\x8C\xE4\xBB\x85\xE7\xAE\xA1\xE7\x90\x86\xE5\x91\x98\xE5\x8F\xAF\xE7\x94\xA8");
+                return true;
+            }
+            
+            auto& ai = AIService::instance();
+            
+            if (args.empty()) {
+                auto models = ai.getAvailableModels();
+                std::string list_text = "=== \xE5\x8F\xAF\xE7\x94\xA8\xE6\xA8\xA1\xE5\x9E\x8B ===\n";
+                for (const auto& id : models) {
+                    std::string mark = (id == ai.getCurrentModel()) ? " *" : "";
+                    list_text += "  " + id + " - " + ai.getModelInfo(id) + mark + "\n";
+                }
+                list_text += "\n\xE4\xBD\xBF\xE7\x94\xA8 /model <id> \xE5\x88\x87\xE6\x8D\xA2";
+                replyTo(event, list_text);
+            } else {
+                if (ai.switchModel(args)) {
+                    replyTo(event, "\xE6\xA8\xA1\xE5\x9E\x8B\xE5\xB7\xB2\xE5\x88\x87\xE6\x8D\xA2\xE4\xB8\xBA\xEF\xBC\x9A" + ai.getCurrentModelName());
+                } else {
+                    replyTo(event, "\xE6\x9C\xAA\xE6\x89\xBE\xE5\x88\xB0\xE8\xAF\xA5\xE6\xA8\xA1\xE5\x9E\x8B\xEF\xBC\x8C\xE8\xAF\xB7\xE4\xBD\xBF\xE7\x94\xA8 /model \xE6\x9F\xA5\xE7\x9C\x8B");
+                }
+            }
+            return true;
+        }
+        
         return false;
+    }
+    
+    bool isAdmin(int64_t user_id) {
+        static std::vector<int64_t> admins = {2643518036};
+        return std::find(admins.begin(), admins.end(), user_id) != admins.end();
     }
     
     bool handleChat(const MessageEvent& event, const std::string& content) {
@@ -224,12 +258,23 @@ private:
         }
         
         if (response.empty()) {
-            replyTo(event, "AI\xE6\x9C\x8D\xE5\x8A\xA1\xE6\x9A\x82\xE6\x97\xB6\xE4\xB8\x8D\xE5\x8F\xAF\xE7\x94\xA8 (>_<)");
+            ErrorCode err = AIService::instance().getLastError();
+            std::string user_msg = ErrorSystem::instance().formatUserError(err);
+            replyTo(event, user_msg);
+            AIService::instance().clearLastError();
             return true;
         }
         
+        response = filterCQCodes(response);
         replyTo(event, response);
         return true;
+    }
+    
+    std::string filterCQCodes(const std::string& text) {
+        std::string result = text;
+        std::regex cq_regex("\\[CQ:[^\\]]+\\]");
+        result = std::regex_replace(result, cq_regex, "");
+        return result;
     }
     
     void reply(const MessageEvent& event, const std::string& message) {

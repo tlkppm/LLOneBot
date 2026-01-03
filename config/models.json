@@ -1,0 +1,17 @@
+{
+    "current": "gemini2.5",
+    "models": {
+        "gemini2.5": {
+            "name": "Gemini 2.5",
+            "url": "YOUR_GEMINI_API_URL",
+            "description": "Google Gemini 2.5 Pro",
+            "format": "json"
+        },
+        "deepseek3.2": {
+            "name": "DeepSeek 3.2",
+            "url": "YOUR_DEEPSEEK_API_URL",
+            "description": "深度求索新一代高效性模型",
+            "format": "form"
+        }
+    }
+}

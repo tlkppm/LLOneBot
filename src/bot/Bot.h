@@ -14,9 +14,19 @@
 #include "../plugin/AIPlugin.h"
 #include "../ai/ContextDatabase.h"
 #include "../ai/PersonalitySystem.h"
+#include "../ai/AIService.h"
+#include "../core/Calendar.h"
 #include "../admin/AdminServer.h"
 #include "../admin/AdminApi.h"
 #include "../admin/Statistics.h"
+#include "../core/PermissionSystem.h"
+#include "../core/RateLimiter.h"
+#include "../core/StructuredLogger.h"
+#include "../core/MetricsExporter.h"
+#include "../core/TraceSystem.h"
+#include "../core/ConfigWatcher.h"
+#include "../core/PluginSandbox.h"
+#include "../core/ResponseCache.h"
 #include <memory>
 #include <atomic>
 #include <thread>
@@ -66,7 +76,17 @@ public:
         }
         
         ContextDatabase::instance().initialize("data/context.db");
+        Calendar::instance().initialize();
         PersonalitySystem::instance().initialize();
+        
+        PermissionSystem::instance().initialize("config/permissions.json");
+        RateLimiter::instance().initialize();
+        StructuredLogger::instance().initialize(config.log.log_dir, SLogLevel::INFO);
+        MetricsExporter::instance().initialize();
+        TraceSystem::instance().initialize(1.0, "lchbot");
+        ConfigWatcher::instance().initialize(5000);
+        PluginSandbox::instance().initialize();
+        ResponseCache::instance().initialize(100 * 1024 * 1024, 3600, "data/response_cache.dat");
         
         api_ = std::make_unique<OneBotApi>();
         PythonTaskQueue::instance().setApi(api_.get());
@@ -119,6 +139,15 @@ public:
                 ws_client_->send(message);
             }
         });
+        
+        AIService::instance().loadModels("config/models.json");
+        if (AIService::instance().getCurrentModel().empty()) {
+            AIService::instance().setApiUrl(config.ai.api_url);
+        }
+        if (!config.ai.api_key.empty()) {
+            AIService::instance().setApiKey(config.ai.api_key);
+        }
+        LOG_INFO("[AI] API URL: " + config.ai.api_url);
         
         initialized_ = true;
         LOG_INFO("LCHBOT initialized successfully");

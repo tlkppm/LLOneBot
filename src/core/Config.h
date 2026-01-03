@@ -36,10 +36,16 @@ struct LogConfig {
     uint32_t max_files = 10;
 };
 
+struct AIConfig {
+    std::string api_url = "";
+    std::string api_key;
+};
+
 struct BotConfig {
     WebSocketConfig websocket;
     PluginConfig plugin;
     LogConfig log;
+    AIConfig ai;
     std::string data_dir = "data";
     std::string config_file = "config.ini";
     int admin_port = 8080;
@@ -185,6 +191,10 @@ private:
                     }
                 }
             }
+        }
+        else if (section == "ai") {
+            if (key == "api_url") config_.ai.api_url = value;
+            else if (key == "api_key") config_.ai.api_key = value;
         }
     }
     

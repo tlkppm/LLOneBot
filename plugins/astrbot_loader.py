@@ -188,7 +188,8 @@ class AstrBotPluginLoader(LCHBotPlugin):
                 elif result.result_type == "chain":
                     self.reply(event, result.content)
         except Exception as e:
-            print(f"[AstrBotLoader] Result processing error: {e}")
+            error_msg = f"[LCHBOT] 错误 #5003 [AstrBot]\nAstrBot API调用错误\n详情: {str(e)[:100]}"
+            print(error_msg)
             traceback.print_exc()
     
     def _background_handle_command(self, event, cmd, handler):
@@ -206,15 +207,19 @@ class AstrBotPluginLoader(LCHBotPlugin):
                             if result:
                                 self._process_result(event, result)
                     except Exception as e:
-                        print(f"[AstrBotLoader] Handler error: {e}")
+                        error_msg = f"[LCHBOT] 错误 #5001 [AstrBot] AstrBot处理器错误 | 详情: {cmd} - {str(e)[:100]}"
+                        print(error_msg)
                         traceback.print_exc()
+                        self.reply(event, f"[LCHBOT] 插件处理出错 [AstrBot #5001]")
                 
                 loop.run_until_complete(run_handler_streaming())
                 loop.close()
                     
             except Exception as e:
-                print(f"[AstrBotLoader] Background error for {cmd}: {e}")
+                error_msg = f"[LCHBOT] 错误 #5002 [AstrBot] AstrBot命令执行错误 | 详情: {cmd} - {str(e)[:100]}"
+                print(error_msg)
                 traceback.print_exc()
+                self.reply(event, f"[LCHBOT] 命令执行出错 [AstrBot #5002]")
         
         t = threading.Thread(target=run_in_thread, daemon=False)
         t.start()

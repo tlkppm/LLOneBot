@@ -7,6 +7,12 @@
 #include "../plugin/PluginManager.h"
 #include "../ai/PersonalitySystem.h"
 #include "../core/Logger.h"
+#include "../core/PermissionSystem.h"
+#include "../core/RateLimiter.h"
+#include "../core/MetricsExporter.h"
+#include "../core/TraceSystem.h"
+#include "../core/ResponseCache.h"
+#include "../core/PluginSandbox.h"
 
 namespace LCHBOT {
 
@@ -40,7 +46,31 @@ public:
             return handleReload(method, path, body);
         });
         
-        LOG_INFO("[AdminApi] API handlers registered");
+        server.registerHandler("/api/metrics", [this](const std::string& method, const std::string& path, const std::string& body) {
+            return handleMetrics(method, path, body);
+        });
+        
+        server.registerHandler("/api/permissions", [this](const std::string& method, const std::string& path, const std::string& body) {
+            return handlePermissions(method, path, body);
+        });
+        
+        server.registerHandler("/api/traces", [this](const std::string& method, const std::string& path, const std::string& body) {
+            return handleTraces(method, path, body);
+        });
+        
+        server.registerHandler("/api/cache", [this](const std::string& method, const std::string& path, const std::string& body) {
+            return handleCache(method, path, body);
+        });
+        
+        server.registerHandler("/api/sandbox", [this](const std::string& method, const std::string& path, const std::string& body) {
+            return handleSandbox(method, path, body);
+        });
+        
+        server.registerHandler("/metrics", [this](const std::string& method, const std::string& path, const std::string& body) {
+            return MetricsExporter::instance().exportPrometheus();
+        });
+        
+        LOG_INFO("[AdminApi] API handlers registered (with enterprise features)");
     }
     
 private:
@@ -189,6 +219,120 @@ private:
             }
         }
         return result;
+    }
+    
+    std::string handleMetrics(const std::string& method, const std::string& path, const std::string& body) {
+        auto& metrics = MetricsExporter::instance();
+        auto& cache = ResponseCache::instance();
+        auto& trace = TraceSystem::instance();
+        
+        std::ostringstream json;
+        json << "{";
+        json << "\"cache\":{";
+        auto cache_stats = cache.getStats();
+        json << "\"hits\":" << cache_stats.hits << ",";
+        json << "\"misses\":" << cache_stats.misses << ",";
+        json << "\"hit_rate\":" << cache.getHitRate() << ",";
+        json << "\"size_bytes\":" << cache_stats.total_bytes << ",";
+        json << "\"entries\":" << cache_stats.entry_count;
+        json << "},";
+        
+        auto trace_stats = trace.getStats();
+        json << "\"trace\":{";
+        json << "\"total_spans\":" << trace_stats.total_spans << ",";
+        json << "\"avg_duration_ms\":" << trace_stats.avg_duration_ms << ",";
+        json << "\"errors\":" << trace_stats.errors;
+        json << "}";
+        json << "}";
+        return json.str();
+    }
+    
+    std::string handlePermissions(const std::string& method, const std::string& path, const std::string& body) {
+        auto& perms = PermissionSystem::instance();
+        
+        if (method == "POST" && path.find("/add") != std::string::npos) {
+            return "{\"error\":\"Not implemented\"}";
+        }
+        
+        std::ostringstream json;
+        json << "{";
+        json << "\"owners\":[";
+        auto owners = perms.getOwners();
+        for (size_t i = 0; i < owners.size(); i++) {
+            if (i > 0) json << ",";
+            json << owners[i];
+        }
+        json << "],";
+        
+        json << "\"admins\":[";
+        auto admins = perms.getAdmins();
+        for (size_t i = 0; i < admins.size(); i++) {
+            if (i > 0) json << ",";
+            json << "{\"id\":" << admins[i].first << ",\"level\":" << static_cast<int>(admins[i].second) << "}";
+        }
+        json << "],";
+        json << "\"stats\":\"" << escapeJson(perms.exportStats()) << "\"";
+        json << "}";
+        return json.str();
+    }
+    
+    std::string handleTraces(const std::string& method, const std::string& path, const std::string& body) {
+        auto& trace = TraceSystem::instance();
+        
+        if (path.find("/jaeger") != std::string::npos) {
+            return trace.exportJaegerFormat();
+        }
+        
+        auto spans = trace.getRecentSpans(50);
+        std::ostringstream json;
+        json << "{\"spans\":[";
+        for (size_t i = 0; i < spans.size(); i++) {
+            if (i > 0) json << ",";
+            json << trace.formatSpanJson(spans[i]);
+        }
+        json << "]}";
+        return json.str();
+    }
+    
+    std::string handleCache(const std::string& method, const std::string& path, const std::string& body) {
+        auto& cache = ResponseCache::instance();
+        
+        if (method == "POST" && path.find("/clear") != std::string::npos) {
+            cache.clear();
+            return "{\"success\":true,\"message\":\"Cache cleared\"}";
+        }
+        
+        auto stats = cache.getStats();
+        std::ostringstream json;
+        json << "{";
+        json << "\"hits\":" << stats.hits << ",";
+        json << "\"misses\":" << stats.misses << ",";
+        json << "\"evictions\":" << stats.evictions << ",";
+        json << "\"hit_rate\":" << cache.getHitRate() << ",";
+        json << "\"size_bytes\":" << stats.total_bytes << ",";
+        json << "\"entries\":" << stats.entry_count;
+        json << "}";
+        return json.str();
+    }
+    
+    std::string handleSandbox(const std::string& method, const std::string& path, const std::string& body) {
+        auto& sandbox = PluginSandbox::instance();
+        auto stats = sandbox.getAllStats();
+        
+        std::ostringstream json;
+        json << "{\"plugins\":[";
+        for (size_t i = 0; i < stats.size(); i++) {
+            if (i > 0) json << ",";
+            json << "{";
+            json << "\"name\":\"" << escapeJson(stats[i].plugin_name) << "\",";
+            json << "\"enabled\":" << (stats[i].enabled ? "true" : "false") << ",";
+            json << "\"memory\":" << stats[i].memory_used << ",";
+            json << "\"cpu_us\":" << stats[i].cpu_time_us << ",";
+            json << "\"violations\":" << stats[i].violations;
+            json << "}";
+        }
+        json << "]}";
+        return json.str();
     }
 };
 

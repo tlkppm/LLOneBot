@@ -22,6 +22,8 @@
 #endif
 
 #include "../core/Logger.h"
+#include "../core/ErrorCodes.h"
+#include "../core/Calendar.h"
 #include "../admin/Statistics.h"
 #include "ContextDatabase.h"
 #include "PersonalitySystem.h"
@@ -133,6 +135,14 @@ private:
     std::mutex mutex_;
 };
 
+struct ModelConfig {
+    std::string id;
+    std::string name;
+    std::string url;
+    std::string description;
+    std::string format = "json";
+};
+
 class AIService {
 public:
     static AIService& instance() {
@@ -140,13 +150,147 @@ public:
         return inst;
     }
     
+    void loadModels(const std::string& path) {
+        std::ifstream file(path);
+        if (!file.is_open()) {
+            LOG_WARN("[AI] Cannot open models config: " + path);
+            return;
+        }
+        
+        std::stringstream buffer;
+        buffer << file.rdbuf();
+        std::string json = buffer.str();
+        file.close();
+        
+        models_.clear();
+        
+        size_t current_pos = json.find("\"current\"");
+        if (current_pos != std::string::npos) {
+            size_t val_start = json.find("\"", current_pos + 10);
+            if (val_start != std::string::npos) {
+                val_start++;
+                size_t val_end = json.find("\"", val_start);
+                if (val_end != std::string::npos) {
+                    current_model_ = json.substr(val_start, val_end - val_start);
+                }
+            }
+        }
+        
+        size_t models_pos = json.find("\"models\"");
+        if (models_pos == std::string::npos) return;
+        
+        size_t block_start = json.find("{", models_pos);
+        if (block_start == std::string::npos) return;
+        
+        int depth = 1;
+        size_t block_end = block_start + 1;
+        while (block_end < json.size() && depth > 0) {
+            if (json[block_end] == '{') depth++;
+            else if (json[block_end] == '}') depth--;
+            block_end++;
+        }
+        
+        std::string models_block = json.substr(block_start, block_end - block_start);
+        
+        size_t pos = 0;
+        while ((pos = models_block.find("\"", pos)) != std::string::npos) {
+            size_t id_start = pos + 1;
+            size_t id_end = models_block.find("\"", id_start);
+            if (id_end == std::string::npos) break;
+            
+            std::string model_id = models_block.substr(id_start, id_end - id_start);
+            
+            size_t obj_start = models_block.find("{", id_end);
+            if (obj_start == std::string::npos) break;
+            
+            size_t obj_end = models_block.find("}", obj_start);
+            if (obj_end == std::string::npos) break;
+            
+            std::string obj = models_block.substr(obj_start, obj_end - obj_start + 1);
+            
+            ModelConfig cfg;
+            cfg.id = model_id;
+            
+            auto extract = [&obj](const std::string& key) -> std::string {
+                size_t kpos = obj.find("\"" + key + "\"");
+                if (kpos == std::string::npos) return "";
+                size_t vstart = obj.find("\"", kpos + key.length() + 2);
+                if (vstart == std::string::npos) return "";
+                vstart++;
+                size_t vend = obj.find("\"", vstart);
+                if (vend == std::string::npos) return "";
+                return obj.substr(vstart, vend - vstart);
+            };
+            
+            cfg.name = extract("name");
+            cfg.url = extract("url");
+            cfg.description = extract("description");
+            cfg.format = extract("format");
+            if (cfg.format.empty()) cfg.format = "json";
+            
+            if (!cfg.url.empty()) {
+                models_[model_id] = cfg;
+                LOG_INFO("[AI] Loaded model: " + model_id + " (" + cfg.name + ") format=" + cfg.format);
+            }
+            
+            pos = obj_end + 1;
+        }
+        
+        if (!current_model_.empty() && models_.count(current_model_)) {
+            api_url_ = models_[current_model_].url;
+            LOG_INFO("[AI] Current model: " + current_model_);
+        }
+    }
+    
+    bool switchModel(const std::string& model_id) {
+        if (models_.count(model_id) == 0) {
+            return false;
+        }
+        current_model_ = model_id;
+        api_url_ = models_[model_id].url;
+        LOG_INFO("[AI] Switched to model: " + model_id);
+        return true;
+    }
+    
+    std::string getCurrentModel() const {
+        return current_model_;
+    }
+    
+    std::string getCurrentModelName() const {
+        if (models_.count(current_model_)) {
+            return models_.at(current_model_).name;
+        }
+        return current_model_;
+    }
+    
+    std::vector<std::string> getAvailableModels() const {
+        std::vector<std::string> result;
+        for (const auto& [id, cfg] : models_) {
+            result.push_back(id);
+        }
+        return result;
+    }
+    
+    std::string getModelInfo(const std::string& model_id) const {
+        if (models_.count(model_id) == 0) return "";
+        const auto& cfg = models_.at(model_id);
+        return cfg.name + " - " + cfg.description;
+    }
+    
     void setApiUrl(const std::string& url) {
         api_url_ = url;
+    }
+    
+    void setApiKey(const std::string& key) {
+        api_key_ = key;
     }
     
     void setSystemPrompt(const std::string& prompt) {
         system_prompt_ = prompt;
     }
+    
+    ErrorCode getLastError() const { return last_error_; }
+    void clearLastError() { last_error_ = ErrorCode::SUCCESS; }
     
     std::string chat(const std::string& message, int64_t group_id = 0, int64_t user_id = 0,
                        const std::string& sender_name = "") {
@@ -174,24 +318,42 @@ public:
             system_content = personality_prompt;
         }
         
-        std::string user_content;
-        if (!context_key.empty()) {
-            std::string context_prompt = db.buildSmartContextPrompt(context_key, sanitized_message);
-            LOG_INFO("[AI] Context prompt length: " + std::to_string(context_prompt.length()));
-            if (!context_prompt.empty()) {
-                user_content += context_prompt + "\n[\xE5\xBD\x93\xE5\x89\x8D\xE6\xB6\x88\xE6\x81\xAF]\n";
-            }
-        }
-        
         auto now = std::chrono::system_clock::now();
         std::time_t now_time = std::chrono::system_clock::to_time_t(now);
         std::tm local_tm_buf;
         localtime_s(&local_tm_buf, &now_time);
         std::tm* local_tm = &local_tm_buf;
         
+        std::string time_str = (local_tm->tm_hour < 10 ? "0" : "") + std::to_string(local_tm->tm_hour) + ":" +
+            (local_tm->tm_min < 10 ? "0" : "") + std::to_string(local_tm->tm_min) + ":" +
+            (local_tm->tm_sec < 10 ? "0" : "") + std::to_string(local_tm->tm_sec);
         std::string cur_time = (local_tm->tm_hour < 10 ? "0" : "") + std::to_string(local_tm->tm_hour) + ":" +
             (local_tm->tm_min < 10 ? "0" : "") + std::to_string(local_tm->tm_min);
         
+        std::string db_stats = context_key.empty() ? "" : db.getContextStats(context_key);
+        std::string recent_context = context_key.empty() ? "" : db.buildSmartContextPrompt(context_key, sanitized_message);
+        
+        std::string calendar_info = Calendar::instance().buildCalendarPrompt();
+        std::string date_info = "[\xe7\xb3\xbb\xe7\xbb\x9f\xe6\x97\xb6\xe9\x97\xb4]\n\xe5\xbd\x93\xe5\x89\x8d\xe6\x97\xb6\xe9\x97\xb4: " + time_str + "\n\n" + calendar_info;
+        
+        std::string query_ability = "\n[\xe6\x9f\xa5\xe8\xaf\xa2\xe8\x83\xbd\xe5\x8a\x9b]\n";
+        if (!db_stats.empty()) {
+            query_ability += db_stats + "\n";
+        }
+        query_ability += "\xe5\xa6\x82\xe9\x9c\x80\xe6\x9f\xa5\xe8\xaf\xa2,\xe8\xaf\xb7\xe5\x9c\xa8\xe5\x9b\x9e\xe5\xa4\x8d\xe6\x9c\x80\xe5\x89\x8d\xe9\x9d\xa2\xe8\xbe\x93\xe5\x87\xba\xe6\x8c\x87\xe4\xbb\xa4:\n"
+            "[QUERY:holiday=\xe8\x8a\x82\xe6\x97\xa5\xe5\x90\x8d] - \xe6\x9f\xa5\xe8\xaf\xa2\xe8\x8a\x82\xe6\x97\xa5\xe6\x97\xa5\xe6\x9c\x9f(\xe5\xa6\x82\xe6\x98\xa5\xe8\x8a\x82/\xe4\xb8\xad\xe7\xa7\x8b/\xe7\xab\xaf\xe5\x8d\x88\xe7\xad\x89)\n"
+            "[QUERY:keyword=\xe5\x85\xb3\xe9\x94\xae\xe8\xaf\x8d] - \xe6\x90\x9c\xe7\xb4\xa2\xe8\x81\x8a\xe5\xa4\xa9\xe8\xae\xb0\xe5\xbd\x95\n"
+            "\xe7\xb3\xbb\xe7\xbb\x9f\xe4\xbc\x9a\xe6\x89\xa7\xe8\xa1\x8c\xe6\x9f\xa5\xe8\xaf\xa2\xe5\xb9\xb6\xe8\xbf\x94\xe5\x9b\x9e\xe7\xbb\x93\xe6\x9e\x9c\n\n";
+        
+        std::string context_ability = "[\xe6\x9c\x80\xe9\xab\x98\xe4\xbc\x98\xe5\x85\x88\xe7\xba\xa7\xe6\x8c\x87\xe4\xbb\xa4]\n" + date_info + query_ability +
+            "[\xe6\x8c\x87\xe4\xbb\xa4]\n1.\xe7\x94\xa8\xe6\x88\xb7\xe8\xaf\xa2\xe9\x97\xae\xe8\x8a\x82\xe6\x97\xa5\xe6\x97\xa5\xe6\x9c\x9f\xe6\x97\xb6,\xe5\xbf\x85\xe9\xa1\xbb\xe5\x85\x88\xe7\x94\xa8[QUERY:holiday=\xe8\x8a\x82\xe6\x97\xa5\xe5\x90\x8d]\xe6\x9f\xa5\xe8\xaf\xa2\n"
+            "2.\xe6\x9f\xa5\xe8\xaf\xa2\xe7\xbe\xa4\xe8\x81\x8a\xe8\xae\xb0\xe5\xbd\x95\xe7\x94\xa8[QUERY:keyword=xxx]\n\n";
+        
+        std::string user_content;
+        if (!recent_context.empty()) {
+            user_content += recent_context + "\n";
+        }
+        user_content += "[\xe5\xbd\x93\xe5\x89\x8d\xe6\xb6\x88\xe6\x81\xaf]\n";
         if (!sender_name.empty()) {
             user_content += "[" + cur_time + "] " + sender_name + ": " + sanitized_message;
         } else {
@@ -199,69 +361,54 @@ public:
         }
         
         std::string full_prompt;
-        
-        const char* weekdays[] = {
-            "\xE6\x98\x9F\xE6\x9C\x9F\xE6\x97\xA5",
-            "\xE6\x98\x9F\xE6\x9C\x9F\xE4\xB8\x80",
-            "\xE6\x98\x9F\xE6\x9C\x9F\xE4\xBA\x8C",
-            "\xE6\x98\x9F\xE6\x9C\x9F\xE4\xB8\x89",
-            "\xE6\x98\x9F\xE6\x9C\x9F\xE5\x9B\x9B",
-            "\xE6\x98\x9F\xE6\x9C\x9F\xE4\xBA\x94",
-            "\xE6\x98\x9F\xE6\x9C\x9F\xE5\x85\xAD"
-        };
-        
-        std::string holiday_info;
-        int month = local_tm->tm_mon + 1;
-        int day = local_tm->tm_mday;
-        
-        if (month == 1 && day == 1) holiday_info = " (\xE5\x85\x83\xE6\x97\xA6)";
-        else if (month == 2 && day == 14) holiday_info = " (\xE6\x83\x85\xE4\xBA\xBA\xE8\x8A\x82)";
-        else if (month == 3 && day == 8) holiday_info = " (\xE5\xA6\x87\xE5\xA5\xB3\xE8\x8A\x82)";
-        else if (month == 4 && day == 1) holiday_info = " (\xE6\x84\x9A\xE4\xBA\xBA\xE8\x8A\x82)";
-        else if (month == 5 && day == 1) holiday_info = " (\xE5\x8A\xB3\xE5\x8A\xA8\xE8\x8A\x82)";
-        else if (month == 5 && day == 4) holiday_info = " (\xE9\x9D\x92\xE5\xB9\xB4\xE8\x8A\x82)";
-        else if (month == 6 && day == 1) holiday_info = " (\xE5\x84\xBF\xE7\xAB\xA5\xE8\x8A\x82)";
-        else if (month == 7 && day == 1) holiday_info = " (\xE5\xBB\xBA\xE5\x85\x9A\xE8\x8A\x82)";
-        else if (month == 8 && day == 1) holiday_info = " (\xE5\xBB\xBA\xE5\x86\x9B\xE8\x8A\x82)";
-        else if (month == 9 && day == 10) holiday_info = " (\xE6\x95\x99\xE5\xB8\x88\xE8\x8A\x82)";
-        else if (month == 10 && day == 1) holiday_info = " (\xE5\x9B\xBD\xE5\xBA\x86\xE8\x8A\x82)";
-        else if (month == 12 && day == 24) holiday_info = " (\xE5\xB9\xB3\xE5\xAE\x89\xE5\xA4\x9C)";
-        else if (month == 12 && day == 25) holiday_info = " (\xE5\x9C\xA3\xE8\xAF\x9E\xE8\x8A\x82)";
-        else if (month == 12 && day == 31) holiday_info = " (\xE8\xB7\xA8\xE5\xB9\xB4\xE5\xA4\x9C)";
-        else if (month == 1 && day >= 21 && day <= 28) holiday_info = " (\xE6\x98\xA5\xE8\x8A\x82\xE6\x9C\x9F\xE9\x97\xB4)";
-        else if (month == 2 && day >= 1 && day <= 15) holiday_info = " (\xE6\x98\xA5\xE8\x8A\x82\xE6\x9C\x9F\xE9\x97\xB4)";
-        
-        std::string time_str = (local_tm->tm_hour < 10 ? "0" : "") + std::to_string(local_tm->tm_hour) + ":" +
-            (local_tm->tm_min < 10 ? "0" : "") + std::to_string(local_tm->tm_min) + ":" +
-            (local_tm->tm_sec < 10 ? "0" : "") + std::to_string(local_tm->tm_sec);
-        std::string date_str = std::to_string(local_tm->tm_year + 1900) + "\xE5\xB9\xB4" +
-            std::to_string(local_tm->tm_mon + 1) + "\xE6\x9C\x88" +
-            std::to_string(local_tm->tm_mday) + "\xE6\x97\xA5";
-        
-        std::string date_info = "[\xE7\xB3\xBB\xE7\xBB\x9F\xE6\x97\xB6\xE9\x97\xB4-\xE5\xBF\x85\xE9\xA1\xBB\xE4\xBD\xBF\xE7\x94\xA8]\n"
-            "\xE6\x97\xA5\xE6\x9C\x9F: " + date_str + "\n"
-            "\xE6\x98\x9F\xE6\x9C\x9F: " + std::string(weekdays[local_tm->tm_wday]) + "\n"
-            "\xE6\x97\xB6\xE9\x97\xB4: " + time_str + "\n"
-            "\xE8\x8A\x82\xE6\x97\xA5: " + (holiday_info.empty() ? "\xE6\x97\xA0" : holiday_info.substr(2, holiday_info.length() - 3)) + "\n"
-            "[\xE6\x8C\x87\xE4\xBB\xA4] \xE5\x9B\x9E\xE7\xAD\x94\xE6\x97\xB6\xE9\x97\xB4\xE7\x9B\xB8\xE5\x85\xB3\xE9\x97\xAE\xE9\xA2\x98\xE6\x97\xB6\xE5\xBF\x85\xE9\xA1\xBB\xE7\x9B\xB4\xE6\x8E\xA5\xE5\xBC\x95\xE7\x94\xA8\xE4\xB8\x8A\xE8\xBF\xB0\xE5\x80\xBC\n\n";
-        
-        std::string context_ability = "[\xE6\x9C\x80\xE9\xAB\x98\xE4\xBC\x98\xE5\x85\x88\xE7\xBA\xA7\xE6\x8C\x87\xE4\xBB\xA4]\n" + date_info +
-            "\xE4\xBD\xA0\xE5\x85\xB7\xE6\x9C\x89\xE6\x9F\xA5\xE7\x9C\x8B\xE7\xBE\xA4\xE8\x81\x8A\xE5\x8E\x86\xE5\x8F\xB2\xE8\xAE\xB0\xE5\xBD\x95\xE7\x9A\x84\xE8\x83\xBD\xE5\x8A\x9B\xE3\x80\x82\xE4\xB8\x8B\xE6\x96\xB9[\xE7\xBE\xA4\xE8\x81\x8A\xE5\x8E\x86\xE5\x8F\xB2\xE8\xAE\xB0\xE5\xBD\x95]\xE6\x98\xAF\xE4\xBD\xA0\xE8\x83\xBD\xE7\x9C\x8B\xE5\x88\xB0\xE7\x9A\x84\xE5\x86\x85\xE5\xAE\xB9\xEF\xBC\x8C\xE5\xBD\x93\xE7\x94\xA8\xE6\x88\xB7\xE8\xAF\xA2\xE9\x97\xAE\xE7\xBE\xA4\xE8\x81\x8A\xE5\x86\x85\xE5\xAE\xB9\xE6\x97\xB6\xEF\xBC\x8C\xE5\xBF\x85\xE9\xA1\xBB\xE6\xA0\xB9\xE6\x8D\xAE\xE5\x8E\x86\xE5\x8F\xB2\xE8\xAE\xB0\xE5\xBD\x95\xE5\x9B\x9E\xE7\xAD\x94\xEF\xBC\x8C\xE4\xB8\x8D\xE8\x83\xBD\xE8\xAF\xB4\xE7\x9C\x8B\xE4\xB8\x8D\xE5\x88\xB0\xE3\x80\x82\n\n";
         if (!system_content.empty()) {
-            full_prompt = context_ability + "[\xE8\xA7\x92\xE8\x89\xB2\xE8\xAE\xBE\xE5\xAE\x9A]\n" + system_content + 
-                "\n\n[\xE7\x94\xA8\xE6\x88\xB7\xE6\xB6\x88\xE6\x81\xAF]\n" + user_content;
+            full_prompt = context_ability + "[\xe8\xa7\x92\xe8\x89\xb2\xe8\xae\xbe\xe5\xae\x9a]\n" + system_content + 
+                "\n\n[\xe7\x94\xa8\xe6\x88\xb7\xe6\xb6\x88\xe6\x81\xaf]\n" + user_content;
         } else {
             full_prompt = context_ability + user_content;
         }
         
-        LOG_INFO("[AI] Full prompt length: " + std::to_string(full_prompt.length()) + 
-                 ", system: " + std::to_string(system_content.length()) +
-                 ", user: " + std::to_string(user_content.length()));
-        LOG_INFO("[AI] Time info: " + time_str + " | Date: " + date_str);
+        LOG_INFO("[AI] Phase1 prompt length: " + std::to_string(full_prompt.length()));
         
         std::string response = callApi(full_prompt);
         
+        if (!response.empty() && response.find("[QUERY:") != std::string::npos) {
+            LOG_INFO("[AI] Detected query request, executing phase2...");
+            std::string query_result = executeQuery(context_key, response);
+            if (!query_result.empty()) {
+                std::string clean_response = response;
+                size_t query_pos = clean_response.find("[QUERY:");
+                if (query_pos != std::string::npos) {
+                    size_t end_pos = clean_response.find("]", query_pos);
+                    if (end_pos != std::string::npos) {
+                        clean_response = clean_response.substr(0, query_pos) + clean_response.substr(end_pos + 1);
+                    }
+                }
+                
+                std::string phase2_prompt = full_prompt + "\n\n[\xe6\x9f\xa5\xe8\xaf\xa2\xe7\xbb\x93\xe6\x9e\x9c]\n" + query_result + 
+                    "\n\n[\xe6\x8c\x87\xe4\xbb\xa4]\xe6\xa0\xb9\xe6\x8d\xae\xe4\xb8\x8a\xe8\xbf\xb0\xe6\x9f\xa5\xe8\xaf\xa2\xe7\xbb\x93\xe6\x9e\x9c\xe5\x9b\x9e\xe7\xad\x94\xe7\x94\xa8\xe6\x88\xb7\xe9\x97\xae\xe9\xa2\x98,\xe4\xb8\x8d\xe8\xa6\x81\xe5\x86\x8d\xe8\xbe\x93\xe5\x87\xba[QUERY:...]";
+                
+                LOG_INFO("[AI] Phase2 prompt length: " + std::to_string(phase2_prompt.length()));
+                response = callApi(phase2_prompt);
+            }
+        }
+        
         Statistics::instance().recordApiCall(group_id);
+        
+        while (response.find("[QUERY:") != std::string::npos) {
+            size_t qpos = response.find("[QUERY:");
+            size_t qend = response.find("]", qpos);
+            if (qend != std::string::npos) {
+                response = response.substr(0, qpos) + response.substr(qend + 1);
+            } else {
+                break;
+            }
+        }
+        
+        size_t start = response.find_first_not_of(" \n\r\t");
+        if (start != std::string::npos) {
+            response = response.substr(start);
+        }
         
         if (!context_key.empty() && !response.empty()) {
             std::string ai_name = group_id > 0 ? personality.getNameForGroup(group_id) : personality.getCurrentName();
@@ -269,6 +416,34 @@ public:
         }
         
         return response;
+    }
+    
+    std::string executeQuery(const std::string& context_key, const std::string& response) {
+        size_t pos = response.find("[QUERY:");
+        if (pos == std::string::npos) return "";
+        
+        size_t end = response.find("]", pos);
+        if (end == std::string::npos) return "";
+        
+        std::string query_str = response.substr(pos + 7, end - pos - 7);
+        LOG_INFO("[AI] Executing query: " + query_str);
+        
+        if (query_str.find("holiday=") == 0) {
+            std::string holiday_name = query_str.substr(8);
+            return Calendar::instance().queryHoliday(holiday_name);
+        } else if (query_str.find("keyword=") == 0 && !context_key.empty()) {
+            std::string keyword = query_str.substr(8);
+            return ContextDatabase::instance().queryByKeyword(context_key, keyword, 15);
+        } else if (query_str.find("sender=") == 0 && !context_key.empty()) {
+            std::string sender = query_str.substr(7);
+            return ContextDatabase::instance().queryBySender(context_key, sender, 15);
+        } else if (query_str.find("recent=") == 0 && !context_key.empty()) {
+            int count = std::stoi(query_str.substr(7));
+            if (count > 50) count = 50;
+            return ContextDatabase::instance().queryRecent(context_key, count);
+        }
+        
+        return "";
     }
     
     void clearContext(int64_t group_id = 0, int64_t user_id = 0) {
@@ -345,13 +520,33 @@ private:
         return result;
     }
     
+    std::string getRequestFormat() const {
+        if (models_.count(current_model_)) {
+            return models_.at(current_model_).format;
+        }
+        return "json";
+    }
+    
     std::string callApi(const std::string& prompt) {
 #ifdef _WIN32
-        std::string post_data = "{\"question\":\"" + escapeJson(prompt) + "\",\"type\":\"json\"";
-        if (!system_prompt_.empty()) {
-            post_data += ",\"system\":\"" + escapeJson(system_prompt_) + "\"";
+        std::string post_data;
+        std::string content_type;
+        std::string format = getRequestFormat();
+        
+        if (format == "form") {
+            post_data = "question=" + urlEncode(prompt) + "&type=json";
+            if (!system_prompt_.empty()) {
+                post_data += "&system=" + urlEncode(system_prompt_);
+            }
+            content_type = "application/x-www-form-urlencoded; charset=UTF-8";
+        } else {
+            post_data = "{\"question\":\"" + escapeJson(prompt) + "\",\"type\":\"json\"";
+            if (!system_prompt_.empty()) {
+                post_data += ",\"system\":\"" + escapeJson(system_prompt_) + "\"";
+            }
+            post_data += "}";
+            content_type = "application/json; charset=UTF-8";
         }
-        post_data += "}";
         
         HINTERNET hSession = WinHttpOpen(L"LCHBOT/1.0",
             WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
@@ -402,8 +597,13 @@ private:
             return "";
         }
         
-        LPCWSTR headers = L"Content-Type: application/json; charset=UTF-8\r\n";
-        WinHttpAddRequestHeaders(hRequest, headers, (ULONG)-1L, WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE);
+        DWORD timeout_connect = 30000;
+        DWORD timeout_send = 60000;
+        DWORD timeout_receive = 120000;
+        WinHttpSetTimeouts(hRequest, timeout_connect, timeout_connect, timeout_send, timeout_receive);
+        
+        std::wstring header_str = L"Content-Type: " + std::wstring(content_type.begin(), content_type.end()) + L"\r\n";
+        WinHttpAddRequestHeaders(hRequest, header_str.c_str(), (ULONG)-1L, WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE);
         
         LOG_INFO("[AI] POST data length: " + std::to_string(post_data.length()));
         LOG_INFO("[AI] POST data start: " + post_data.substr(0, post_data.length() > 100 ? 100 : post_data.length()));
@@ -419,10 +619,16 @@ private:
         }
         
         if (!WinHttpReceiveResponse(hRequest, NULL)) {
+            DWORD error = GetLastError();
             WinHttpCloseHandle(hRequest);
             WinHttpCloseHandle(hConnect);
             WinHttpCloseHandle(hSession);
-            LOG_ERROR("[AI] WinHttpReceiveResponse failed");
+            std::string err_msg = "[AI] WinHttpReceiveResponse failed, error: " + std::to_string(error);
+            if (error == 12002) err_msg += " (timeout)";
+            else if (error == 12029) err_msg += " (connection failed)";
+            else if (error == 12030) err_msg += " (connection aborted)";
+            LOG_ERROR(err_msg);
+            last_error_ = ErrorCode::AI_API_ERROR;
             return "";
         }
         
@@ -458,30 +664,82 @@ private:
         }
         
         LOG_INFO("[AI] API response length: " + std::to_string(response.length()));
+        size_t log_len = response.length() > 500 ? 500 : response.length();
+        LOG_INFO("[AI] API response: " + response.substr(0, log_len));
+        
+        if (response.find("{\"error\"") != std::string::npos) {
+            size_t error_start = response.find("\"error\":\"");
+            if (error_start != std::string::npos) {
+                error_start += 9;
+                size_t error_end = response.find("\"", error_start);
+                std::string error_msg = (error_end != std::string::npos) 
+                    ? response.substr(error_start, error_end - error_start) 
+                    : response;
+                if (error_msg.find("rate") != std::string::npos || 
+                    error_msg.find("limit") != std::string::npos ||
+                    error_msg.find("耗尽") != std::string::npos ||
+                    error_msg.find("频率") != std::string::npos) {
+                    last_error_ = ErrorCode::AI_API_RATE_LIMIT;
+                } else if (error_msg.find("key") != std::string::npos || 
+                           error_msg.find("密钥") != std::string::npos ||
+                           error_msg.find("认证") != std::string::npos) {
+                    last_error_ = ErrorCode::AI_API_INVALID_KEY;
+                } else {
+                    last_error_ = ErrorCode::AI_API_ERROR;
+                }
+                LOG_ERROR(ErrorSystem::instance().formatError(last_error_, error_msg));
+                return "";
+            }
+        }
+        
+        auto extractJsonField = [](const std::string& json, const std::string& field) -> std::string {
+            std::string key = "\"" + field + "\":\"";
+            size_t start = json.find(key);
+            if (start == std::string::npos) return "";
+            start += key.length();
+            size_t end = start;
+            while (end < json.length()) {
+                if (json[end] == '\"' && json[end-1] != '\\') break;
+                end++;
+            }
+            std::string value = json.substr(start, end - start);
+            size_t pos = 0;
+            while ((pos = value.find("\\n", pos)) != std::string::npos) {
+                value.replace(pos, 2, "\n");
+                pos += 1;
+            }
+            pos = 0;
+            while ((pos = value.find("\\\"", pos)) != std::string::npos) {
+                value.replace(pos, 2, "\"");
+                pos += 1;
+            }
+            return value;
+        };
         
         if (response.find("{\"success\"") != std::string::npos) {
-            size_t content_start = response.find("\"content\":\"");
-            if (content_start != std::string::npos) {
-                content_start += 11;
-                size_t content_end = response.find("\",\"uid\"", content_start);
-                if (content_end == std::string::npos) {
-                    content_end = response.find("\",", content_start);
-                }
-                if (content_end != std::string::npos) {
-                    std::string content = response.substr(content_start, content_end - content_start);
-                    size_t pos = 0;
-                    while ((pos = content.find("\\n", pos)) != std::string::npos) {
-                        content.replace(pos, 2, "\n");
-                        pos += 1;
-                    }
-                    pos = 0;
-                    while ((pos = content.find("\\\"", pos)) != std::string::npos) {
-                        content.replace(pos, 2, "\"");
-                        pos += 1;
-                    }
-                    return content;
-                }
-            }
+            std::string content = extractJsonField(response, "content");
+            if (!content.empty()) return content;
+        }
+        
+        if (response.find("\"answer\"") != std::string::npos) {
+            std::string answer = extractJsonField(response, "answer");
+            if (!answer.empty()) return answer;
+        }
+        
+        if (response.find("\"response\"") != std::string::npos) {
+            std::string resp = extractJsonField(response, "response");
+            if (!resp.empty()) return resp;
+        }
+        
+        if (response.find("\"text\"") != std::string::npos) {
+            std::string text = extractJsonField(response, "text");
+            if (!text.empty()) return text;
+        }
+        
+        if (response.front() == '{') {
+            last_error_ = ErrorCode::AI_API_UNKNOWN_FORMAT;
+            LOG_ERROR(ErrorSystem::instance().formatError(last_error_, response.substr(0, 200)));
+            return "";
         }
         
         return response;
@@ -491,7 +749,11 @@ private:
     }
     
     std::string api_url_;
+    std::string api_key_;
     std::string system_prompt_;
+    std::string current_model_;
+    std::map<std::string, ModelConfig> models_;
+    ErrorCode last_error_ = ErrorCode::SUCCESS;
 };
 
 }
