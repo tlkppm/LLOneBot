@@ -22,16 +22,30 @@
 - **多人格AI系统** | Multi-Personality AI System
 - **插件优先级系统** | Plugin Priority System
 
+### 企业级模块 | Enterprise Modules (v2.0)
+- **权限管理系统** | Permission System (Owner/Admin/Mod/VIP/User 多级权限)
+- **请求限流器** | Rate Limiter (令牌桶算法 + 熔断器)
+- **结构化日志** | Structured Logger (JSON格式 + TraceID关联)
+- **Prometheus指标** | Metrics Exporter (Counter/Gauge/Histogram)
+- **分布式追踪** | Trace System (Jaeger格式导出)
+- **配置热重载** | Config Watcher (文件监控 + 回调通知)
+- **插件沙箱** | Plugin Sandbox (权限隔离 + 资源限制)
+- **AI响应缓存** | Response Cache (LRU + TTL + 持久化)
+- **数据库层** | Database Layer (SQL语法 + 索引 + 事务)
+
 ### 插件系统 | Plugin System
 - **Python 插件支持** | Python Plugin Support
 - **C++ 原生插件** | C++ Native Plugins
+- **AstrBot 插件兼容** | AstrBot Plugin Compatibility (支持加载AstrBot框架插件)
 - **自动热加载** | Auto Hot-Reload
 - **插件间通信** | Inter-Plugin Communication
+- **插件沙箱隔离** | Plugin Sandbox Isolation
 
 ### 内置功能 | Built-in Features
-- **AI 聊天** | AI Chat
-- **上下文记忆** | Context Memory
-- **管理面板** | Admin Panel (HTTP API)
+- **AI 聊天** | AI Chat (多模型支持: Gemini/DeepSeek)
+- **上下文记忆** | Context Memory (数据库存储 + 智能检索)
+- **管理面板** | Admin Panel (HTTP API + 企业级监控)
+- **节日日历** | Holiday Calendar (农历/公历节日)
 
 ---
 
@@ -193,6 +207,12 @@ f"[CQ:reply,id={message_id}]"
 | `/api/plugins/{name}/enable` | POST | 启用插件 |
 | `/api/plugins/{name}/disable` | POST | 禁用插件 |
 | `/api/reload` | POST | 重载系统 |
+| `/api/metrics` | GET | 监控指标 (JSON) |
+| `/api/permissions` | GET | 权限信息 |
+| `/api/traces` | GET | 追踪记录 |
+| `/api/cache` | GET/POST | 缓存状态/清理 |
+| `/api/sandbox` | GET | 沙箱状态 |
+| `/metrics` | GET | Prometheus格式指标 |
 
 ---
 
@@ -214,8 +234,9 @@ f"[CQ:reply,id={message_id}]"
 ## 编译 | Build
 
 ### 要求 | Requirements
-- Visual Studio 2017+
-- C++17 支持
+- Visual Studio 2019+ (推荐 2022)
+- C++20 支持
+- Windows SDK 10.0+
 
 ### 编译命令 | Build Command
 
