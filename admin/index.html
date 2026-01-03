@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,7 +8,9 @@
     <!-- RemixIcon -->
     <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
     <!-- Google Fonts -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Noto+Sans+SC:wght@300;400;500;700&display=swap"
+        rel="stylesheet">
     <style>
         :root {
             --primary-color: #6366f1;
@@ -21,7 +24,11 @@
             --card-radius: 16px;
         }
 
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
 
         body {
             font-family: 'Inter', 'Noto Sans SC', sans-serif;
@@ -31,14 +38,18 @@
             min-height: 100vh;
             display: flex;
             flex-direction: column;
-            backdrop-filter: brightness(0.7); /* Dim the background slightly for readability */
+            backdrop-filter: brightness(0.7);
+            /* Dim the background slightly for readability */
         }
 
         /* Overlay to ensure text readability on busy backgrounds */
         body::before {
             content: '';
             position: fixed;
-            top: 0; left: 0; width: 100%; height: 100%;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
             background: rgba(0, 0, 0, 0.4);
             z-index: -1;
         }
@@ -47,7 +58,7 @@
             padding: 2rem 1.5rem;
             text-align: center;
             backdrop-filter: blur(10px);
-            background: rgba(0,0,0,0.2);
+            background: rgba(0, 0, 0, 0.2);
             border-bottom: 1px solid var(--glass-border);
             display: flex;
             justify-content: space-between;
@@ -64,7 +75,7 @@
             display: flex;
             align-items: center;
             gap: 0.5rem;
-            text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
         }
 
         .brand p {
@@ -181,14 +192,23 @@
         /* Lists */
         .list {
             max-height: 320px;
-            overflow-y: auto; 
+            overflow-y: auto;
             padding-right: 4px;
         }
-        
+
         /* Custom Scrollbar */
-        .list::-webkit-scrollbar { width: 4px; }
-        .list::-webkit-scrollbar-track { background: transparent; }
-        .list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 2px; }
+        .list::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .list::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .list::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 2px;
+        }
 
         .list-item {
             display: flex;
@@ -237,18 +257,50 @@
             gap: 0.5rem;
         }
 
-        .btn-primary { background: var(--primary-color); color: white; }
-        .btn-primary:hover { background: var(--primary-hover); }
+        .btn-primary {
+            background: var(--primary-color);
+            color: white;
+        }
 
-        .btn-danger { background: rgba(239, 68, 68, 0.2); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.4); }
-        .btn-danger:hover { background: rgba(239, 68, 68, 0.3); }
+        .btn-primary:hover {
+            background: var(--primary-hover);
+        }
 
-        .btn-success { background: rgba(16, 185, 129, 0.2); color: #6ee7b7; border: 1px solid rgba(16, 185, 129, 0.4); }
-        .btn-success:hover { background: rgba(16, 185, 129, 0.3); }
+        .btn-danger {
+            background: rgba(239, 68, 68, 0.2);
+            color: #fca5a5;
+            border: 1px solid rgba(239, 68, 68, 0.4);
+        }
 
-        .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-        .status-dot.online { background: var(--success-color); box-shadow: 0 0 8px rgba(16, 185, 129, 0.5); }
-        .status-dot.offline { background: var(--text-muted); }
+        .btn-danger:hover {
+            background: rgba(239, 68, 68, 0.3);
+        }
+
+        .btn-success {
+            background: rgba(16, 185, 129, 0.2);
+            color: #6ee7b7;
+            border: 1px solid rgba(16, 185, 129, 0.4);
+        }
+
+        .btn-success:hover {
+            background: rgba(16, 185, 129, 0.3);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        .status-dot.online {
+            background: var(--success-color);
+            box-shadow: 0 0 8px rgba(16, 185, 129, 0.5);
+        }
+
+        .status-dot.offline {
+            background: var(--text-muted);
+        }
 
         .refresh-fab {
             position: fixed;
@@ -274,12 +326,69 @@
             transform: scale(1.1) rotate(180deg);
         }
 
+        /* Tags & Badges */
+        .tag {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            font-weight: 600;
+        }
+
+        .tag-owner {
+            background: rgba(251, 191, 36, 0.2);
+            color: #fbbf24;
+            border: 1px solid rgba(251, 191, 36, 0.4);
+        }
+
+        .tag-admin {
+            background: rgba(96, 165, 250, 0.2);
+            color: #60a5fa;
+            border: 1px solid rgba(96, 165, 250, 0.4);
+        }
+
+        /* Progress Bars (for Cache/Memory) */
+        .progress-bar {
+            height: 6px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 6px;
+            width: 100%;
+        }
+
+        .progress-fill {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.5s ease;
+        }
+
+        .bg-success {
+            background: var(--success-color);
+        }
+
+        .bg-primary {
+            background: var(--primary-color);
+        }
+
+        .bg-danger {
+            background: var(--danger-color);
+        }
+
         @media (max-width: 768px) {
-            .header { flex-direction: column; gap: 1rem; text-align: center; }
-            .grid { grid-template-columns: 1fr; }
+            .header {
+                flex-direction: column;
+                gap: 1rem;
+                text-align: center;
+            }
+
+            .grid {
+                grid-template-columns: 1fr;
+            }
         }
     </style>
 </head>
+
 <body>
     <div class="header">
         <div class="brand">
@@ -335,6 +444,88 @@
                 <h2 data-i18n="active_groups"><i class="ri-group-line"></i> Active Groups</h2>
                 <div class="list" id="group-list"></div>
             </div>
+
+            <!-- Cache Stats -->
+            <div class="card">
+                <h2 data-i18n="cache_status"><i class="ri-database-2-line"></i> Cache Status</h2>
+                <div class="stat-grid">
+                    <div class="stat-item">
+                        <div class="value" id="cache-hits">0</div>
+                        <div class="label" data-i18n="cache_hits">Hits</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="value" id="cache-misses">0</div>
+                        <div class="label" data-i18n="cache_misses">Misses</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="value" id="cache-rate">0%</div>
+                        <div class="label" data-i18n="hit_rate">Hit Rate</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="value" id="cache-entries">0</div>
+                        <div class="label" data-i18n="entries">Entries</div>
+                    </div>
+                </div>
+                <button class="btn btn-danger" style="margin-top:1rem;width:100%" onclick="clearCache()">
+                    <i class="ri-delete-bin-line"></i> <span data-i18n="clear_cache">Clear Cache</span>
+                </button>
+            </div>
+
+            <!-- Trace Stats -->
+            <div class="card">
+                <h2 data-i18n="trace_system"><i class="ri-route-line"></i> Trace System</h2>
+                <div class="stat-grid">
+                    <div class="stat-item">
+                        <div class="value" id="trace-spans">0</div>
+                        <div class="label" data-i18n="total_spans">Total Spans</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="value" id="trace-avg">0ms</div>
+                        <div class="label" data-i18n="avg_duration">Avg Duration</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="value" id="trace-errors">0</div>
+                        <div class="label" data-i18n="errors">Errors</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="value" id="trace-active">0</div>
+                        <div class="label" data-i18n="active_traces">Active</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Permissions -->
+            <div class="card">
+                <h2 data-i18n="permissions"><i class="ri-shield-user-line"></i> Permissions</h2>
+                <div class="stat-grid">
+                    <div class="stat-item">
+                        <div class="value" id="perm-owners">0</div>
+                        <div class="label" data-i18n="owners">Owners</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="value" id="perm-admins">0</div>
+                        <div class="label" data-i18n="admins">Admins</div>
+                    </div>
+                </div>
+                <div class="list" id="owner-list" style="margin-top:1rem;max-height:150px"></div>
+            </div>
+
+            <!-- Sandbox Status -->
+            <div class="card">
+                <h2 data-i18n="sandbox_status"><i class="ri-shield-check-line"></i> Sandbox Status</h2>
+                <div class="list" id="sandbox-list"></div>
+            </div>
+
+            <!-- Prometheus -->
+            <div class="card">
+                <h2 data-i18n="prometheus"><i class="ri-line-chart-line"></i> Prometheus Metrics</h2>
+                <p style="color:var(--text-muted);margin-bottom:1rem" data-i18n="prometheus_desc">Export metrics in
+                    Prometheus format for external monitoring systems.</p>
+                <a href="/metrics" target="_blank" class="btn btn-primary" style="width:100%;justify-content:center">
+                    <i class="ri-external-link-line"></i> <span data-i18n="view_metrics">View /metrics</span>
+                </a>
+            </div>
+
         </div>
     </div>
 
@@ -343,7 +534,7 @@
     <script>
         const translations = {
             zh: {
-                admin_panel: "LCHBOT 管理面板",
+                admin_panel: "管理面板",
                 manage_framework: "QQ 机器人框架管理",
                 statistics: "统计数据",
                 total_calls: "API 调用总数",
@@ -356,7 +547,30 @@
                 personality: "人格",
                 calls: "调用",
                 version: "版本",
-                author: "作者"
+                author: "作者",
+                cache_status: "缓存状态",
+                cache_hits: "命中",
+                cache_misses: "未命中",
+                hit_rate: "命中率",
+                entries: "条目数",
+                clear_cache: "清空缓存",
+                trace_system: "追踪系统",
+                total_spans: "总 Span 数",
+                avg_duration: "平均耗时",
+                errors: "错误数",
+                active_traces: "活跃追踪",
+                permissions: "权限管理",
+                owners: "所有者",
+                admins: "管理员",
+                sandbox_status: "沙箱状态",
+                prometheus: "Prometheus 指标",
+                prometheus_desc: "导出 Prometheus 格式指标供外部监控系统使用。",
+                view_metrics: "查看 /metrics",
+                enterprise_monitoring: "企业级监控",
+                enterprise_cache_hits: "缓存命中率",
+                enterprise_cache_misses: "缓存未命中率",
+                enterprise_trace_spans: "追踪 Span 数",
+                enterprise_trace_avg: "平均追踪耗时"
             },
             en: {
                 admin_panel: "LCHBOT Admin",
@@ -372,7 +586,25 @@
                 personality: "Personality",
                 calls: "Calls",
                 version: "v",
-                author: "by"
+                author: "by",
+                cache_status: "Cache Status",
+                cache_hits: "Hits",
+                cache_misses: "Misses",
+                hit_rate: "Hit Rate",
+                entries: "Entries",
+                clear_cache: "Clear Cache",
+                trace_system: "Trace System",
+                total_spans: "Total Spans",
+                avg_duration: "Avg Duration",
+                errors: "Errors",
+                active_traces: "Active",
+                permissions: "Permissions",
+                owners: "Owners",
+                admins: "Admins",
+                sandbox_status: "Sandbox Status",
+                prometheus: "Prometheus Metrics",
+                prometheus_desc: "Export metrics in Prometheus format for external monitoring systems.",
+                view_metrics: "View /metrics"
             }
         };
 
@@ -388,9 +620,9 @@
                         const icon = el.querySelector('i');
                         el.childNodes[1].textContent = " " + t[key];
                     } else if (el.tagName === 'H1') {
-                         const icon = el.querySelector('i');
+                        const icon = el.querySelector('i');
                         el.childNodes[1].textContent = " " + t[key];
-                    }  else {
+                    } else {
                         el.textContent = t[key];
                     }
                 }
@@ -436,7 +668,7 @@
                         const btnClass = p.enabled ? 'btn-danger' : 'btn-success';
                         const btnText = p.enabled ? t.disable : t.enable;
                         const statusClass = p.enabled ? 'online' : 'offline';
-                        
+
                         html += `
                             <div class="list-item">
                                 <div class="content">
@@ -505,9 +737,108 @@
         }
 
         function togglePlugin(name, enable) {
-            fetch('/api/plugins/' + name + '/' + (enable ? 'enable' : 'disable'), {method: 'POST'}).then(() => {
+            fetch('/api/plugins/' + name + '/' + (enable ? 'enable' : 'disable'), { method: 'POST' }).then(() => {
                 loadPlugins();
                 loadStats();
+            });
+        }
+
+        function loadCache() {
+            api('/cache').then(data => {
+                if (data) {
+                    document.getElementById('cache-hits').textContent = data.hits || 0;
+                    document.getElementById('cache-misses').textContent = data.misses || 0;
+                    const rate = (data.hit_rate || 0) * 100;
+                    document.getElementById('cache-rate').innerHTML = `
+                        ${rate.toFixed(1)}%
+                        <div class="progress-bar"><div class="progress-fill bg-success" style="width:${rate}%"></div></div>
+                    `;
+                    document.getElementById('cache-entries').textContent = data.entries || 0;
+                }
+            });
+        }
+
+        function loadMetrics() {
+            api('/metrics').then(data => {
+                if (data) {
+                    if (data.cache) {
+                        document.getElementById('cache-hits').textContent = data.cache.hits || 0;
+                        document.getElementById('cache-misses').textContent = data.cache.misses || 0;
+                        document.getElementById('cache-rate').textContent = ((data.cache.hit_rate || 0) * 100).toFixed(1) + '%';
+                        document.getElementById('cache-entries').textContent = data.cache.entries || 0;
+                    }
+                    if (data.trace) {
+                        document.getElementById('trace-spans').textContent = data.trace.total_spans || 0;
+                        document.getElementById('trace-avg').textContent = (data.trace.avg_duration_ms || 0).toFixed(1) + 'ms';
+                        document.getElementById('trace-errors').textContent = data.trace.errors || 0;
+                    }
+                }
+            });
+        }
+
+        function loadPermissions() {
+            api('/permissions').then(data => {
+                if (data) {
+                    const owners = data.owners || [];
+                    const admins = data.admins || [];
+                    document.getElementById('perm-owners').textContent = owners.length;
+                    document.getElementById('perm-admins').textContent = admins.length;
+
+                    const list = document.getElementById('owner-list');
+                    let html = '';
+                    owners.forEach(id => {
+                        html += `<div class="list-item"><div class="content"><i class="ri-vip-crown-line" style="color:#fbbf24"></i><div><div class="name"><span class="tag tag-owner">Owner</span></div><div class="info">QQ: ${id}</div></div></div></div>`;
+                    });
+                    admins.forEach(a => {
+                        html += `<div class="list-item"><div class="content"><i class="ri-admin-line" style="color:#60a5fa"></i><div><div class="name"><span class="tag tag-admin">Admin Lv.${a.level}</span></div><div class="info">QQ: ${a.id}</div></div></div></div>`;
+                    });
+                    list.innerHTML = html || '<div style="color:var(--text-muted);text-align:center;padding:1rem">No permissions configured</div>';
+                }
+            });
+        }
+
+        function loadSandbox() {
+            api('/sandbox').then(data => {
+                if (data && data.plugins) {
+                    const list = document.getElementById('sandbox-list');
+                    let html = '';
+                    data.plugins.forEach(p => {
+                        const statusClass = p.enabled ? 'online' : 'offline';
+                        const memMB = (p.memory / 1024 / 1024).toFixed(2);
+                        // Mock max memory 512MB for visuals
+                        const memPercent = Math.min(100, (p.memory / 1024 / 1024 / 512) * 100);
+
+                        html += `
+                            <div class="list-item" style="flex-wrap: wrap;">
+                                <div class="content" style="width:100%; margin-bottom: 0.5rem">
+                                    <span class="status-dot ${statusClass}"></span>
+                                    <div style="flex:1">
+                                        <div class="name" style="display:flex;justify-content:space-between">
+                                            <span>${p.name}</span>
+                                            <span style="font-size:0.75rem; color:var(--text-muted)">Violations: ${p.violations}</span>
+                                        </div>
+                                        <div class="info">CPU: ${(p.cpu_us / 1000).toFixed(1)}ms</div>
+                                    </div>
+                                </div>
+                                <div style="width:100%">
+                                    <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:var(--text-muted)">
+                                        <span>Memory</span>
+                                        <span>${memMB} MB</span>
+                                    </div>
+                                    <div class="progress-bar"><div class="progress-fill bg-primary" style="width:${memPercent}%"></div></div>
+                                </div>
+                            </div>
+                        `;
+                    });
+                    list.innerHTML = html || '<div style="color:var(--text-muted);text-align:center;padding:1rem">No sandbox data</div>';
+                }
+            });
+        }
+
+        function clearCache() {
+            fetch('/api/cache/clear', { method: 'POST' }).then(() => {
+                loadCache();
+                loadMetrics();
             });
         }
 
@@ -516,6 +847,10 @@
             loadPlugins();
             loadPersonalities();
             loadGroups();
+            loadCache();
+            loadMetrics();
+            loadPermissions();
+            loadSandbox();
         }
 
         // Initialize
@@ -524,4 +859,5 @@
         setInterval(loadAll, 10000);
     </script>
 </body>
+
 </html>
