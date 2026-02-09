@@ -34,6 +34,23 @@ struct GroupMemberCache {
         pending_.insert(group_id);
     }
     
+    std::vector<std::pair<int64_t, std::string>> getMembers(int64_t group_id) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = cache_.find(group_id);
+        if (it != cache_.end()) return it->second;
+        return {};
+    }
+    
+    bool isMember(int64_t group_id, int64_t user_id) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = cache_.find(group_id);
+        if (it == cache_.end()) return true;
+        for (const auto& [uid, nick] : it->second) {
+            if (uid == user_id) return true;
+        }
+        return false;
+    }
+    
     std::string toJson() {
         std::lock_guard<std::mutex> lock(mutex_);
         std::string result = "{";

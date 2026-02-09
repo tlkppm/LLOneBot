@@ -60,11 +60,11 @@ public:
         
         if (!loaded) {
             LOG_WARN("[Personality] Failed to load from file, using default");
-            registerBuiltinPersonality("yunmeng", "AI\xE5\x8A\xA9\xE6\x89\x8B", getDefaultPrompt());
+            registerBuiltinPersonality("yunmeng", "AI助手", getDefaultPrompt());
         }
 
         if (personalities_.empty()) {
-            registerBuiltinPersonality("yunmeng", "AI\xE5\x8A\xA9\xE6\x89\x8B", getDefaultPrompt());
+            registerBuiltinPersonality("yunmeng", "AI助手", getDefaultPrompt());
         }
         
         current_personality_id_ = "yunmeng";
@@ -100,7 +100,7 @@ public:
         size_t pos = json.find("\"personalities\"");
         if (pos == std::string::npos) return false;
         
-        std::vector<std::string> ids = {"yunmeng", "ailixiya", "xiadie", "teresiya", "xiugou"};
+        std::vector<std::string> ids = extractAllPersonalityIds(json);
         
         for (const auto& id : ids) {
             std::string id_marker = "\"" + id + "\"";
@@ -110,7 +110,7 @@ public:
             std::string name = extractJsonString(json, id_pos, "name");
             std::string prompt = extractJsonString(json, id_pos, "prompt");
             
-            if (!name.empty() && !prompt.empty()) {
+            if (!name.empty()) {
                 prompt = unescapeJson(prompt);
                 registerBuiltinPersonality(id, name, prompt);
                 LOG_INFO("[Personality] Loaded: " + id + " (" + name + ")");
@@ -118,6 +118,47 @@ public:
         }
         
         return !personalities_.empty();
+    }
+    
+    std::vector<std::string> extractAllPersonalityIds(const std::string& json) {
+        std::vector<std::string> ids;
+        size_t personalities_pos = json.find("\"personalities\"");
+        if (personalities_pos == std::string::npos) return ids;
+        
+        size_t obj_start = json.find("{", personalities_pos);
+        if (obj_start == std::string::npos) return ids;
+        
+        int brace_count = 1;
+        size_t search_pos = obj_start + 1;
+        
+        while (search_pos < json.length() && brace_count > 0) {
+            size_t next_quote = json.find("\"", search_pos);
+            size_t next_open = json.find("{", search_pos);
+            size_t next_close = json.find("}", search_pos);
+            
+            if (next_close == std::string::npos) break;
+            
+            if (next_open != std::string::npos && next_open < next_close) {
+                if (next_quote != std::string::npos && next_quote < next_open && brace_count == 1) {
+                    size_t id_end = json.find("\"", next_quote + 1);
+                    if (id_end != std::string::npos) {
+                        std::string id = json.substr(next_quote + 1, id_end - next_quote - 1);
+                        if (!id.empty() && id != "name" && id != "prompt") {
+                            ids.push_back(id);
+                        }
+                        search_pos = id_end + 1;
+                        continue;
+                    }
+                }
+                brace_count++;
+                search_pos = next_open + 1;
+            } else {
+                brace_count--;
+                search_pos = next_close + 1;
+            }
+        }
+        
+        return ids;
     }
     
     std::string extractJsonString(const std::string& json, size_t start_pos, const std::string& key) {
@@ -185,7 +226,7 @@ public:
         if (it != personalities_.end()) {
             return it->second.name;
         }
-        return "AI\xE5\x8A\xA9\xE6\x89\x8B";
+        return "AI助手";
     }
     
     std::string getCurrentId() {
@@ -227,7 +268,7 @@ public:
         }
         
         if (!loaded) {
-            registerBuiltinPersonality("yunmeng", "AI\xE5\x8A\xA9\xE6\x89\x8B", getDefaultPrompt());
+            registerBuiltinPersonality("yunmeng", "AI助手", getDefaultPrompt());
         }
         
         group_personalities_ = saved_group_personalities;
@@ -287,7 +328,7 @@ public:
         if (it != personalities_.end()) {
             return it->second.name;
         }
-        return "AI\xE5\x8A\xA9\xE6\x89\x8B";
+        return "AI助手";
     }
     
     std::vector<std::pair<std::string, std::string>> listPersonalities() {
@@ -306,13 +347,12 @@ public:
             "ignore previous", "ignore all previous", "forget instructions",
             "forget all instructions", "disregard previous", "disregard all",
             "new role", "you are now", "act as if", "pretend to be",
-            "pretend you are", "system:", "[SYSTEM]",
-            "\xE5\x81\x87\xE8\xA3\x85\xE4\xBD\xA0\xE6\x98\xAF",
-            "\xE5\xBF\x98\xE8\xAE\xB0\xE6\x8C\x87\xE4\xBB\xA4",
-            "\xE5\xBF\xBD\xE7\x95\xA5\xE8\xAE\xBE\xE5\xAE\x9A",
-            "\xE4\xBD\xA0\xE7\x8E\xB0\xE5\x9C\xA8\xE6\x98\xAF",
-            "\xE4\xBB\x8E\xE7\x8E\xB0\xE5\x9C\xA8\xE5\xBC\x80\xE5\xA7\x8B",
-            "\xE6\x89\xAE\xE6\xBC\x94"
+            "pretend you are", "system:", "[SYSTEM]", "override instructions",
+            "bypass", "jailbreak", "DAN mode", "developer mode",
+            "do anything now", "ignore safety", "ignore rules",
+            "假装你是", "忘记指令", "忽略设定", "忽略之前",
+            "你现在是", "从现在开始", "扮演", "无视规则",
+            "忽略所有", "覆盖指令", "越狱", "开发者模式"
         };
         
         std::string lower_input = input;
@@ -322,16 +362,50 @@ public:
             std::string lower_keyword = keyword;
             std::transform(lower_keyword.begin(), lower_keyword.end(), lower_keyword.begin(), ::tolower);
             if (lower_input.find(lower_keyword) != std::string::npos) {
-                LOG_WARN("[Personality] Injection attempt detected and blocked");
-                return "[\xE7\x94\xA8\xE6\x88\xB7\xE6\xB6\x88\xE6\x81\xAF\xE5\xB7\xB2\xE8\xA2\xAB\xE5\xAE\x89\xE5\x85\xA8\xE8\xBF\x87\xE6\xBB\xA4]";
+                LOG_WARN("[Personality] Injection attempt blocked: " + keyword);
+                return "[用户消息已被安全过滤]";
             }
         }
         
+        sanitized = stripControlTags(sanitized);
+        
         if (sanitized.length() > 2000) {
-            sanitized = sanitized.substr(0, 2000) + "...[\xE6\xB6\x88\xE6\x81\xAF\xE8\xBF\x87\xE9\x95\xBF\xE5\xB7\xB2\xE6\x88\xAA\xE6\x96\xAD]";
+            sanitized = sanitized.substr(0, 2000) + "...[消息过长已截断]";
         }
         
         return sanitized;
+    }
+    
+    std::string stripControlTags(const std::string& input) {
+        std::string result = input;
+        std::vector<std::string> dangerous_tags = {
+            "[THINK]", "[/THINK]", "[ANSWER]", "[/ANSWER]",
+            "[QUERY:", "[系统指令]", "[系统时间]", "[可用工具]",
+            "[工具使用规则]", "[回复格式]", "[角色设定]",
+            "[最高优先级指令]", "[工具执行结果]"
+        };
+        for (const auto& tag : dangerous_tags) {
+            size_t pos = 0;
+            while ((pos = result.find(tag, pos)) != std::string::npos) {
+                result.replace(pos, tag.length(), "");
+            }
+        }
+        return result;
+    }
+    
+    std::string sanitizeOutput(const std::string& output) {
+        std::string result = output;
+        std::vector<std::string> leak_patterns = {
+            "[系统指令]", "[系统时间]", "[可用工具]", "[工具使用规则]",
+            "[回复格式]", "[角色设定]", "[QUERY:", "[THINK]", "[/THINK]"
+        };
+        for (const auto& pattern : leak_patterns) {
+            size_t pos = 0;
+            while ((pos = result.find(pattern, pos)) != std::string::npos) {
+                result.replace(pos, pattern.length(), "");
+            }
+        }
+        return result;
     }
     
     bool registerCustomPersonality(const std::string& id, const std::string& name, const std::string& prompt) {

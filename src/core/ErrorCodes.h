@@ -23,6 +23,7 @@ enum class ErrorCode : int {
     AI_API_RATE_LIMIT = 3002,
     AI_API_INVALID_KEY = 3003,
     AI_API_EMPTY_RESPONSE = 3004,
+    AI_API_QUOTA_EXHAUSTED = 3005,
     AI_API_UNKNOWN_FORMAT = 3006,
     
     PLUGIN_EXEC_ERROR = 4002,
@@ -114,6 +115,7 @@ private:
         descriptions_[ErrorCode::AI_API_RATE_LIMIT] = {"AI API\xe8\xaf\xb7\xe6\xb1\x82\xe9\xa2\x91\xe7\x8e\x87\xe8\xb6\x85\xe9\x99\x90", "AI API rate limit"};
         descriptions_[ErrorCode::AI_API_INVALID_KEY] = {"AI API\xe5\xaf\x86\xe9\x92\xa5\xe6\x97\xa0\xe6\x95\x88", "AI API invalid key"};
         descriptions_[ErrorCode::AI_API_EMPTY_RESPONSE] = {"AI API\xe8\xbf\x94\xe5\x9b\x9e\xe7\xa9\xba\xe5\x93\x8d\xe5\xba\x94", "AI API empty response"};
+        descriptions_[ErrorCode::AI_API_QUOTA_EXHAUSTED] = {"AI API\xe9\x85\x8d\xe9\xa2\x9d\xe5\xb7\xb2\xe8\x80\x97\xe5\xb0\xbd", "AI API quota exhausted"};
         descriptions_[ErrorCode::AI_API_UNKNOWN_FORMAT] = {"AI API\xe5\x93\x8d\xe5\xba\x94\xe6\xa0\xbc\xe5\xbc\x8f\xe6\x9c\xaa\xe7\x9f\xa5", "AI API unknown format"};
         descriptions_[ErrorCode::PLUGIN_EXEC_ERROR] = {"\xe6\x8f\x92\xe4\xbb\xb6\xe6\x89\xa7\xe8\xa1\x8c\xe9\x94\x99\xe8\xaf\xaf", "Plugin exec error"};
         descriptions_[ErrorCode::ASTRBOT_HANDLER_ERROR] = {"AstrBot\xe5\xa4\x84\xe7\x90\x86\xe5\x99\xa8\xe9\x94\x99\xe8\xaf\xaf", "AstrBot handler error"};
@@ -128,6 +130,7 @@ private:
         user_messages_[ErrorCode::AI_API_RATE_LIMIT] = {"AI\xe6\x9c\x8d\xe5\x8a\xa1\xe7\xb9\x81\xe5\xbf\x99,\xe8\xaf\xb7\xe7\xa8\x8d\xe5\x90\x8e\xe9\x87\x8d\xe8\xaf\x95", "AI service busy, retry later"};
         user_messages_[ErrorCode::AI_API_INVALID_KEY] = {"AI\xe6\x9c\x8d\xe5\x8a\xa1\xe9\x85\x8d\xe7\xbd\xae\xe9\x94\x99\xe8\xaf\xaf", "AI service config error"};
         user_messages_[ErrorCode::AI_API_EMPTY_RESPONSE] = {"AI\xe6\x9c\x8d\xe5\x8a\xa1\xe5\x93\x8d\xe5\xba\x94\xe5\xbc\x82\xe5\xb8\xb8", "AI service response error"};
+        user_messages_[ErrorCode::AI_API_QUOTA_EXHAUSTED] = {"AI\xe6\xa8\xa1\xe5\x9e\x8b\xe9\x85\x8d\xe9\xa2\x9d\xe5\xb7\xb2\xe8\x80\x97\xe5\xb0\xbd", "AI model quota exhausted"};
         user_messages_[ErrorCode::AI_API_UNKNOWN_FORMAT] = {"AI\xe6\x9c\x8d\xe5\x8a\xa1\xe5\x93\x8d\xe5\xba\x94\xe5\xbc\x82\xe5\xb8\xb8", "AI service response error"};
         user_messages_[ErrorCode::ASTRBOT_HANDLER_ERROR] = {"\xe6\x8f\x92\xe4\xbb\xb6\xe5\xa4\x84\xe7\x90\x86\xe5\x87\xba\xe9\x94\x99", "Plugin handler error"};
         user_messages_[ErrorCode::ASTRBOT_COMMAND_ERROR] = {"\xe5\x91\xbd\xe4\xbb\xa4\xe6\x89\xa7\xe8\xa1\x8c\xe5\x87\xba\xe9\x94\x99", "Command execution error"};

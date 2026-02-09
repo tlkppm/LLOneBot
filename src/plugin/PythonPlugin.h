@@ -134,7 +134,7 @@ public:
         if (initialized_) return true;
         
 #ifdef _WIN32
-        std::vector<std::string> python_versions = {"313", "312", "311", "310", "39", "38"};
+        std::vector<std::string> python_versions = {"314", "313", "312", "311", "310", "39", "38"};
         std::vector<std::string> search_paths;
         
         if (!python_home.empty()) {
@@ -163,8 +163,11 @@ public:
             search_paths.push_back("C:\\Program Files\\Python" + ver);
             search_paths.push_back("C:\\Program Files (x86)\\Python" + ver);
             search_paths.push_back("D:\\Python" + ver);
+            search_paths.push_back("D:\\Programs\\Python\\Python" + ver);
             search_paths.push_back("E:\\Python" + ver);
+            search_paths.push_back("E:\\Programs\\Python\\Python" + ver);
             search_paths.push_back("F:\\Python" + ver);
+            search_paths.push_back("F:\\Programs\\Python\\Python" + ver);
         }
         
         search_paths.push_back("");
@@ -868,15 +871,32 @@ inline void PythonPipelineScheduler::workerLoop(int worker_id) {
                 "import builtins\n"
                 "_lchbot_reply_queue = []\n"
                 "builtins._lchbot_member_cache = '" + escaped_cache + "'\n"
+                "builtins._lchbot_pipeline_error = None\n"
                 "try:\n"
                 "    _lchbot_event = json.loads(" + escaped_json + ")\n"
                 "    if '" + task.plugin_name + "' in _lchbot_plugins:\n"
                 "        _lchbot_plugins['" + task.plugin_name + "'].on_message(_lchbot_event)\n"
+                "    else:\n"
+                "        builtins._lchbot_pipeline_error = 'PLUGIN_NOT_FOUND'\n"
                 "except Exception as e:\n"
                 "    import traceback\n"
-                "    print(f'[Pipeline:" + task.plugin_name + "] {traceback.format_exc()}')\n";
+                "    builtins._lchbot_pipeline_error = traceback.format_exc()\n";
             
             py.executeString(code);
+            
+            // Check for pipeline errors and log them properly
+            std::string check_error = 
+                "import builtins\n"
+                "_lchbot_error_result = getattr(builtins, '_lchbot_pipeline_error', None) or ''\n";
+            py.executeString(check_error);
+            std::string pipeline_error = py.getGlobalString("_lchbot_error_result");
+            if (!pipeline_error.empty()) {
+                if (pipeline_error == "PLUGIN_NOT_FOUND") {
+                    LOG_ERROR("[PythonPipeline] Plugin '" + task.plugin_name + "' not found in _lchbot_plugins registry");
+                } else {
+                    LOG_ERROR("[PythonPipeline] Exception in " + task.plugin_name + ":\n" + pipeline_error);
+                }
+            }
             
             auto processQueue = [&]() {
                 std::string get_code = 

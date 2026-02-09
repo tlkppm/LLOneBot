@@ -335,9 +335,17 @@ public:
             "import importlib\n"
             "_reload_path = r'" + path + "'\n"
             "_reload_name = '" + name + "'\n"
+            "# Get the remapped name before deletion\n"
+            "_remapped_name = None\n"
             "if _reload_name in _lchbot_plugins:\n"
+            "    _remapped_name = getattr(_lchbot_plugins[_reload_name], 'name', None)\n"
             "    try:\n"
             "        del _lchbot_plugins[_reload_name]\n"
+            "    except: pass\n"
+            "# Also delete the remapped name\n"
+            "if _remapped_name and _remapped_name != _reload_name and _remapped_name in _lchbot_plugins:\n"
+            "    try:\n"
+            "        del _lchbot_plugins[_remapped_name]\n"
             "    except: pass\n"
             "for mod_name in list(sys.modules.keys()):\n"
             "    if _reload_name in mod_name:\n"
@@ -348,8 +356,20 @@ public:
         py.executeString(reload_code);
         
         std::string exec_code = 
+            "# Set current plugin name for register_plugin\n"
+            "_lchbot_current_plugin_name = '" + name + "'\n"
             "try:\n"
             "    exec(open(r'" + path + "', encoding='utf-8').read())\n"
+            "    # Remap plugin name after reload\n"
+            "    if '" + name + "' in _lchbot_plugins:\n"
+            "        _p = _lchbot_plugins['" + name + "']\n"
+            "        _new_name = getattr(_p, 'name', '" + name + "')\n"
+            "        if _new_name != '" + name + "':\n"
+            "            _lchbot_plugins[_new_name] = _p\n"
+            "            print(f'[HotReload] Remapped {\"" + name + "\"} -> {_new_name}')\n"
+            "        # Call on_load after reload\n"
+            "        if hasattr(_p, 'on_load'):\n"
+            "            _p.on_load()\n"
             "    print(f'[HotReload] Plugin {\"" + name + "\"} reloaded successfully')\n"
             "except Exception as e:\n"
             "    import traceback\n"
@@ -406,13 +426,13 @@ public:
                 if (is_python) {
                     plugin->onMessage(event);
                 } else {
-                    if (plugin->onMessage(event)) return true;
-                    
                     if (event.isPrivate()) {
-                        if (plugin->onPrivateMessage(event)) return true;
+                        plugin->onPrivateMessage(event);
                     } else {
-                        if (plugin->onGroupMessage(event)) return true;
+                        plugin->onGroupMessage(event);
                     }
+                    
+                    if (plugin->onMessage(event)) return true;
                 }
             } catch (...) {
                 LOG_ERROR("Exception in plugin: " + plugin->getInfo().name);

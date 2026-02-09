@@ -24,9 +24,9 @@ public:
     
     std::string getZodiac(int year) {
         const char* zodiac[] = {
-            "\xe9\xbc\xa0", "\xe7\x89\x9b", "\xe8\x99\x8e", "\xe5\x85\x94",
-            "\xe9\xbe\x99", "\xe8\x9b\x87", "\xe9\xa9\xac", "\xe7\xbe\x8a",
-            "\xe7\x8c\xb4", "\xe9\xb8\xa1", "\xe7\x8b\x97", "\xe7\x8c\xaa"
+            "鼠", "牛", "虎", "兔",
+            "龙", "蛇", "马", "羊",
+            "猴", "鸡", "狗", "猪"
         };
         int idx = (year - 4) % 12;
         if (idx < 0) idx += 12;
@@ -58,19 +58,14 @@ public:
         int wday = tm_buf.tm_wday;
         
         const char* weekdays[] = {
-            "\xe6\x98\x9f\xe6\x9c\x9f\xe6\x97\xa5",
-            "\xe6\x98\x9f\xe6\x9c\x9f\xe4\xb8\x80",
-            "\xe6\x98\x9f\xe6\x9c\x9f\xe4\xba\x8c",
-            "\xe6\x98\x9f\xe6\x9c\x9f\xe4\xb8\x89",
-            "\xe6\x98\x9f\xe6\x9c\x9f\xe5\x9b\x9b",
-            "\xe6\x98\x9f\xe6\x9c\x9f\xe4\xba\x94",
-            "\xe6\x98\x9f\xe6\x9c\x9f\xe5\x85\xad"
+            "星期日", "星期一", "星期二", "星期三",
+            "星期四", "星期五", "星期六"
         };
         
         std::string holiday = getHolidayInfo(year, month, day);
         
         std::string result;
-        result += std::to_string(year) + "\xe5\xb9\xb4" + std::to_string(month) + "\xe6\x9c\x88" + std::to_string(day) + "\xe6\x97\xa5 ";
+        result += std::to_string(year) + "年" + std::to_string(month) + "月" + std::to_string(day) + "日 ";
         result += weekdays[wday];
         if (!holiday.empty()) {
             result += " (" + holiday + ")";
@@ -86,9 +81,8 @@ public:
         int year = tm_buf.tm_year + 1900;
         
         std::string prompt;
-        prompt += "\xe5\xbd\x93\xe5\x89\x8d\xe5\xb9\xb4\xe4\xbb\xbd: " + std::to_string(year) + "\xe5\xb9\xb4(" + getZodiac(year) + "\xe5\xb9\xb4)\n";
-        prompt += "\xe4\xbb\x8a\xe5\xa4\xa9: " + getFullDateInfo(0) + "\n";
-        prompt += std::to_string(year) + "\xe5\xb9\xb4\xe6\x98\xa5\xe8\x8a\x82: " "2" "\xe6\x9c\x88" "17" "\xe6\x97\xa5\n";
+        prompt += "当前年份: " + std::to_string(year) + "年(" + getZodiac(year) + "年)\n";
+        prompt += "今天: " + getFullDateInfo(0) + "\n";
         auto important = getKeyHolidays(year);
         for (const auto& h : important) {
             prompt += h + "\n";
@@ -100,9 +94,9 @@ public:
     std::vector<std::string> getKeyHolidays(int year) {
         std::vector<std::string> result;
         std::vector<std::string> key_names = {
-            "\xe9\x99\xa4\xe5\xa4\x95", "\xe6\x98\xa5\xe8\x8a\x82", "\xe5\x85\x83\xe5\xae\xb5\xe8\x8a\x82",
-            "\xe6\xb8\x85\xe6\x98\x8e\xe8\x8a\x82", "\xe7\xab\xaf\xe5\x8d\x88\xe8\x8a\x82",
-            "\xe4\xb8\xad\xe7\xa7\x8b\xe8\x8a\x82", "\xe5\x9b\xbd\xe5\xba\x86\xe6\x97\xa5"
+            "除夕", "春节", "元宵节",
+            "清明节", "端午节",
+            "中秋节", "国庆日"
         };
         
         std::string prefix = std::to_string(year) + "-";
@@ -115,7 +109,7 @@ public:
                         if (dash != std::string::npos) {
                             std::string month = date_part.substr(0, dash);
                             std::string day = date_part.substr(dash + 1);
-                            result.push_back(name + ": " + month + "\xe6\x9c\x88" + day + "\xe6\x97\xa5");
+                            result.push_back(name + ": " + month + "月" + day + "日");
                             LOG_INFO("[Calendar] Key holiday: " + name + " -> " + month + "/" + day);
                         }
                         break;
@@ -135,13 +129,13 @@ public:
         std::string prefix = std::to_string(year) + "-";
         
         std::map<std::string, int> month_map = {
-            {"\xe4\xb8\x80\xe6\x9c\x88", 1}, {"\xe4\xba\x8c\xe6\x9c\x88", 2}, {"\xe4\xb8\x89\xe6\x9c\x88", 3},
-            {"\xe5\x9b\x9b\xe6\x9c\x88", 4}, {"\xe4\xba\x94\xe6\x9c\x88", 5}, {"\xe5\x85\xad\xe6\x9c\x88", 6},
-            {"\xe4\xb8\x83\xe6\x9c\x88", 7}, {"\xe5\x85\xab\xe6\x9c\x88", 8}, {"\xe4\xb9\x9d\xe6\x9c\x88", 9},
-            {"\xe5\x8d\x81\xe6\x9c\x88", 10}, {"\xe5\x8d\x81\xe4\xb8\x80\xe6\x9c\x88", 11}, {"\xe5\x8d\x81\xe4\xba\x8c\xe6\x9c\x88", 12},
-            {"1\xe6\x9c\x88", 1}, {"2\xe6\x9c\x88", 2}, {"3\xe6\x9c\x88", 3}, {"4\xe6\x9c\x88", 4},
-            {"5\xe6\x9c\x88", 5}, {"6\xe6\x9c\x88", 6}, {"7\xe6\x9c\x88", 7}, {"8\xe6\x9c\x88", 8},
-            {"9\xe6\x9c\x88", 9}, {"10\xe6\x9c\x88", 10}, {"11\xe6\x9c\x88", 11}, {"12\xe6\x9c\x88", 12}
+            {"一月", 1}, {"二月", 2}, {"三月", 3},
+            {"四月", 4}, {"五月", 5}, {"六月", 6},
+            {"七月", 7}, {"八月", 8}, {"九月", 9},
+            {"十月", 10}, {"十一月", 11}, {"十二月", 12},
+            {"1月", 1}, {"2月", 2}, {"3月", 3}, {"4月", 4},
+            {"5月", 5}, {"6月", 6}, {"7月", 7}, {"8月", 8},
+            {"9月", 9}, {"10月", 10}, {"11月", 11}, {"12月", 12}
         };
         
         int query_month = 0;
@@ -162,7 +156,7 @@ public:
                         int m = std::stoi(date_part.substr(0, dash));
                         if (m == query_month) {
                             std::string day = date_part.substr(dash + 1);
-                            result += std::to_string(m) + "\xe6\x9c\x88" + day + "\xe6\x97\xa5: " + holiday_name + "\n";
+                            result += std::to_string(m) + "月" + day + "日: " + holiday_name + "\n";
                         }
                     }
                 }
@@ -178,12 +172,12 @@ public:
                     if (dash != std::string::npos) {
                         std::string month = date_part.substr(0, dash);
                         std::string day = date_part.substr(dash + 1);
-                        return holiday_name + ": " + std::to_string(year) + "\xe5\xb9\xb4" + month + "\xe6\x9c\x88" + day + "\xe6\x97\xa5";
+                        return holiday_name + ": " + std::to_string(year) + "年" + month + "月" + day + "日";
                     }
                 }
             }
         }
-        return "\xe6\x9c\xaa\xe6\x89\xbe\xe5\x88\xb0" + name + "\xe7\x9a\x84\xe6\x97\xa5\xe6\x9c\x9f\xe4\xbf\xa1\xe6\x81\xaf";
+        return "未找到" + name + "的日期信息";
     }
     
 private:
@@ -207,8 +201,8 @@ private:
         parseSection(json, "solar_terms_2026", "2026-");
         
         for (const auto& [k, v] : holidays_) {
-            if (v.find("\xe6\x98\xa5\xe8\x8a\x82") != std::string::npos || 
-                v.find("\xe9\x99\xa4\xe5\xa4\x95") != std::string::npos) {
+            if (v.find("春节") != std::string::npos || 
+                v.find("除夕") != std::string::npos) {
                 LOG_INFO("[Calendar] Loaded: " + k + " -> " + v);
             }
         }

@@ -11,6 +11,7 @@
 #include <thread>
 #include <condition_variable>
 #include <atomic>
+#include <filesystem>
 
 namespace LCHBOT {
 
@@ -30,6 +31,18 @@ public:
     
     bool onLoad(PluginContext* context) override {
         context_ = context;
+        AIService::instance().setSetCardFunc([context](int64_t group_id, int64_t user_id, const std::string& card) {
+            if (context && context->getApi()) {
+                context->getApi()->setGroupCard(group_id, user_id, card);
+                LOG_INFO("[AI] setcard: group=" + std::to_string(group_id) + " user=" + std::to_string(user_id) + " card=" + card);
+            }
+        });
+        AIService::instance().setSetTitleFunc([context](int64_t group_id, int64_t user_id, const std::string& title) {
+            if (context && context->getApi()) {
+                context->getApi()->setGroupSpecialTitle(group_id, user_id, title);
+                LOG_INFO("[AI] settitle: group=" + std::to_string(group_id) + " user=" + std::to_string(user_id) + " title=" + title);
+            }
+        });
         LOG_INFO("[AI] Chat plugin loaded");
         return true;
     }
@@ -91,11 +104,6 @@ public:
             return false;
         }
         
-        std::string sender_name = event.sender.card.empty() ? event.sender.nickname : event.sender.card;
-        std::string context_key = "g_" + std::to_string(event.group_id);
-        
-        ContextDatabase::instance().addMessage(context_key, "user", content, sender_name, event.user_id);
-        
         return false;
     }
     
@@ -119,16 +127,17 @@ private:
             
             std::string help_text = 
                 "=== " + current_name + " ===\n"
-                "\xE6\x8C\x87\xE4\xBB\xA4\xE5\x88\x97\xE8\xA1\xA8\xEF\xBC\x9A\n"
-                "  /help - \xE6\x98\xBE\xE7\xA4\xBA\xE5\xB8\xAE\xE5\x8A\xA9\n"
-                "  /status - \xE6\x98\xBE\xE7\xA4\xBA\xE7\x8A\xB6\xE6\x80\x81\n"
-                "  /clear - \xE6\xB8\x85\xE9\x99\xA4\xE4\xB8\x8A\xE4\xB8\x8B\xE6\x96\x87\n"
-                "  /persona - \xE6\x9F\xA5\xE7\x9C\x8B\xE4\xBA\xBA\xE6\xA0\xBC\n"
-                "  /persona <id> - \xE5\x88\x87\xE6\x8D\xA2\xE4\xBA\xBA\xE6\xA0\xBC\n"
-                "  /model - \xE6\x9F\xA5\xE7\x9C\x8B\xE6\xA8\xA1\xE5\x9E\x8B(\xE7\xAE\xA1\xE7\x90\x86\xE5\x91\x98)\n"
-                "  /model <id> - \xE5\x88\x87\xE6\x8D\xA2\xE6\xA8\xA1\xE5\x9E\x8B(\xE7\xAE\xA1\xE7\x90\x86\xE5\x91\x98)\n"
-                "  /about - \xE5\x85\xB3\xE4\xBA\x8E\n"
-                "\n\xE8\x81\x8A\xE5\xA4\xA9\xEF\xBC\x9A@\xE6\x9C\xBA\xE5\x99\xA8\xE4\xBA\xBA \xE6\xB6\x88\xE6\x81\xAF";
+                "指令列表：\n"
+                "  /help - 显示帮助\n"
+                "  /status - 显示状态\n"
+                "  /clear - 清除上下文\n"
+                "  /summary - 年度总结\n"
+                "  /persona - 查看人格\n"
+                "  /persona <id> - 切换人格\n"
+                "  /model - 查看模型(管理员)\n"
+                "  /model <id> - 切换模型(管理员)\n"
+                "  /about - 关于\n"
+                "\n聊天：@机器人 消息";
             replyTo(event, help_text);
             return true;
         }
@@ -139,12 +148,12 @@ private:
                 ps.getNameForGroup(event.group_id) : ps.getCurrentName();
             
             std::string status_text = 
-                "=== \xE7\x8A\xB6\xE6\x80\x81\xE4\xBF\xA1\xE6\x81\xAF ===\n"
-                "\xE7\x8A\xB6\xE6\x80\x81\xEF\xBC\x9A\xE8\xBF\x90\xE8\xA1\x8C\xE4\xB8\xAD\n"
-                "\xE7\x89\x88\xE6\x9C\xAC\xEF\xBC\x9A" "1.0.0\n"
-                "\xE5\xBD\x93\xE5\x89\x8D\xE4\xBA\xBA\xE6\xA0\xBC\xEF\xBC\x9A" + current_name + "\n"
-                "AI\xE5\xBC\x95\xE6\x93\x8E\xEF\xBC\x9AGemini-2.5\n"
-                "\xE5\x8D\x8F\xE8\xAE\xAE\xEF\xBC\x9AOneBot 11";
+                "=== 状态信息 ===\n"
+                "状态：运行中\n"
+                "版本：1.0.0\n"
+                "当前人格：" + current_name + "\n"
+                "AI引擎：" + AIService::instance().getCurrentModelName() + "\n"
+                "协议：OneBot 11";
             replyTo(event, status_text);
             return true;
         }
@@ -155,8 +164,40 @@ private:
             } else {
                 AIService::instance().clearContext(0, event.user_id);
             }
-            replyTo(event, "\xE4\xB8\x8A\xE4\xB8\x8B\xE6\x96\x87\xE5\xB7\xB2\xE6\xB8\x85\xE9\x99\xA4 (^^)");
+            replyTo(event, "上下文已清除 (^^)");
             return true;
+        }
+        
+        if (cmd == "/summary" || cmd == "/总结" || cmd == "/年度总结") {
+            if (!event.isGroup()) {
+                replyTo(event, "年度总结仅限群聊使用");
+                return true;
+            }
+            
+            std::string sender_name = event.sender.card.empty() ? event.sender.nickname : event.sender.card;
+            std::string year_hint = args.empty() ? "今年" : args + "年";
+            std::string summary_prompt = "请为这个群做" + year_hint + "的年度总结，"
+                "包括发言排行、月度变化趋势、最活跃时段等数据分析，"
+                "并用生动有趣的语言总结群聊特点。";
+            
+            std::string response = AIService::instance().chat(
+                summary_prompt, event.group_id, event.user_id, sender_name);
+            
+            if (response.empty()) {
+                replyTo(event, "年度总结生成失败，请稍后重试");
+            } else {
+                response = filterCQCodes(response);
+                replyTo(event, response);
+            }
+            return true;
+        }
+        
+        if (cmd == "/draw" || cmd == "/画" || cmd == "/生成") {
+            if (args.empty()) {
+                replyTo(event, "请提供绘画描述，例如: /draw 一只可爱的猫");
+                return true;
+            }
+            return handleImageGeneration(event, args);
         }
         
         if (cmd == "/persona") {
@@ -164,11 +205,11 @@ private:
             
             if (args.empty()) {
                 auto personalities = ps.listPersonalities();
-                std::string list_text = "=== \xE5\x8F\xAF\xE7\x94\xA8\xE4\xBA\xBA\xE6\xA0\xBC ===\n";
+                std::string list_text = "=== 可用人格 ===\n";
                 for (const auto& [id, name] : personalities) {
                     list_text += "  " + id + " - " + name + "\n";
                 }
-                list_text += "\n\xE4\xBD\xBF\xE7\x94\xA8 /persona <id> \xE5\x88\x87\xE6\x8D\xA2";
+                list_text += "\n使用 /persona <id> 切换";
                 replyTo(event, list_text);
             } else {
                 bool success = false;
@@ -181,15 +222,9 @@ private:
                 if (success) {
                     std::string new_name = event.isGroup() ? 
                         ps.getNameForGroup(event.group_id) : ps.getCurrentName();
-                    replyTo(event, "\xE4\xBA\xBA\xE6\xA0\xBC\xE5\xB7\xB2\xE5\x88\x87\xE6\x8D\xA2\xE4\xB8\xBA\xEF\xBC\x9A" + new_name);
-                    
-                    if (event.isGroup()) {
-                        AIService::instance().clearContext(event.group_id, 0);
-                    } else {
-                        AIService::instance().clearContext(0, event.user_id);
-                    }
+                    replyTo(event, "人格已切换为：" + new_name);
                 } else {
-                    replyTo(event, "\xE6\x9C\xAA\xE6\x89\xBE\xE5\x88\xB0\xE8\xAF\xA5\xE4\xBA\xBA\xE6\xA0\xBC\xEF\xBC\x8C\xE8\xAF\xB7\xE4\xBD\xBF\xE7\x94\xA8 /persona \xE6\x9F\xA5\xE7\x9C\x8B");
+                    replyTo(event, "未找到该人格，请使用 /persona 查看");
                 }
             }
             return true;
@@ -201,18 +236,18 @@ private:
                 ps.getNameForGroup(event.group_id) : ps.getCurrentName();
             
             std::string about_text = 
-                "=== \xE5\x85\xB3\xE4\xBA\x8E " + current_name + " ===\n"
-                "LCHBOT QQ\xE6\x9C\xBA\xE5\x99\xA8\xE4\xBA\xBA\xE6\xA1\x86\xE6\x9E\xB6\n"
-                "OneBot 11\xE5\x8D\x8F\xE8\xAE\xAE\n"
-                "AI\xE5\xBC\x95\xE6\x93\x8E\xEF\xBC\x9A" + AIService::instance().getCurrentModelName() + "\n"
-                "\xE4\xBC\x81\xE4\xB8\x9A\xE7\xBA\xA7\xE4\xBA\xBA\xE6\xA0\xBC\xE7\xB3\xBB\xE7\xBB\x9F";
+                "=== 关于 " + current_name + " ===\n"
+                "LCHBOT QQ机器人框架\n"
+                "OneBot 11协议\n"
+                "AI引擎：" + AIService::instance().getCurrentModelName() + "\n"
+                "企业级人格系统";
             replyTo(event, about_text);
             return true;
         }
         
         if (cmd == "/model") {
             if (!isAdmin(event.user_id)) {
-                replyTo(event, "\xE6\x9D\x83\xE9\x99\x90\xE4\xB8\x8D\xE8\xB6\xB3\xEF\xBC\x8C\xE4\xBB\x85\xE7\xAE\xA1\xE7\x90\x86\xE5\x91\x98\xE5\x8F\xAF\xE7\x94\xA8");
+                replyTo(event, "权限不足，仅管理员可用");
                 return true;
             }
             
@@ -220,19 +255,39 @@ private:
             
             if (args.empty()) {
                 auto models = ai.getAvailableModels();
-                std::string list_text = "=== \xE5\x8F\xAF\xE7\x94\xA8\xE6\xA8\xA1\xE5\x9E\x8B ===\n";
+                std::string list_text = "=== 可用模型 ===\n";
                 for (const auto& id : models) {
                     std::string mark = (id == ai.getCurrentModel()) ? " *" : "";
                     list_text += "  " + id + " - " + ai.getModelInfo(id) + mark + "\n";
                 }
-                list_text += "\n\xE4\xBD\xBF\xE7\x94\xA8 /model <id> \xE5\x88\x87\xE6\x8D\xA2";
+                list_text += "\n使用 /model <id> 切换";
                 replyTo(event, list_text);
             } else {
                 if (ai.switchModel(args)) {
-                    replyTo(event, "\xE6\xA8\xA1\xE5\x9E\x8B\xE5\xB7\xB2\xE5\x88\x87\xE6\x8D\xA2\xE4\xB8\xBA\xEF\xBC\x9A" + ai.getCurrentModelName());
+                    replyTo(event, "模型已切换为：" + ai.getCurrentModelName());
                 } else {
-                    replyTo(event, "\xE6\x9C\xAA\xE6\x89\xBE\xE5\x88\xB0\xE8\xAF\xA5\xE6\xA8\xA1\xE5\x9E\x8B\xEF\xBC\x8C\xE8\xAF\xB7\xE4\xBD\xBF\xE7\x94\xA8 /model \xE6\x9F\xA5\xE7\x9C\x8B");
+                    replyTo(event, "未找到该模型，请使用 /model 查看");
                 }
+            }
+            return true;
+        }
+        
+        if (cmd == "/newconv" || cmd == "/新会话") {
+            if (!isAdmin(event.user_id)) {
+                replyTo(event, "权限不足，仅管理员可用");
+                return true;
+            }
+            
+            if (!event.isGroup()) {
+                replyTo(event, "该命令仅限群聊使用");
+                return true;
+            }
+            
+            auto& ai = AIService::instance();
+            if (ai.createNewConversation(event.group_id)) {
+                replyTo(event, "已创建新会话");
+            } else {
+                replyTo(event, "创建新会话失败");
             }
             return true;
         }
@@ -245,19 +300,122 @@ private:
         return std::find(admins.begin(), admins.end(), user_id) != admins.end();
     }
     
+    std::vector<ImageData> extractImages(const std::string& raw_message) {
+        std::vector<ImageData> images;
+        std::regex img_regex("\\[CQ:image[^\\]]*url=([^,\\]]+)[^\\]]*\\]");
+        std::smatch match;
+        std::string::const_iterator search_start(raw_message.cbegin());
+        
+        while (std::regex_search(search_start, raw_message.cend(), match, img_regex)) {
+            std::string url = match[1].str();
+            if (url.find("&amp;") != std::string::npos) {
+                size_t pos = 0;
+                while ((pos = url.find("&amp;", pos)) != std::string::npos) {
+                    url.replace(pos, 5, "&");
+                    pos += 1;
+                }
+            }
+            
+            ImageData img;
+            img.url = url;
+            img.media_type = "image/jpeg";
+            if (url.find(".png") != std::string::npos || url.find(".PNG") != std::string::npos) {
+                img.media_type = "image/png";
+            } else if (url.find(".gif") != std::string::npos || url.find(".GIF") != std::string::npos) {
+                img.media_type = "image/gif";
+            } else if (url.find(".webp") != std::string::npos || url.find(".WEBP") != std::string::npos) {
+                img.media_type = "image/webp";
+            }
+            
+            img.base64 = AIService::instance().downloadImageAsBase64(url);
+            if (!img.base64.empty()) {
+                images.push_back(img);
+                LOG_INFO("[AI] Extracted image: " + url.substr(0, 60) + "...");
+            }
+            
+            search_start = match.suffix().first;
+        }
+        
+        return images;
+    }
+    
+    std::string removeImageCQ(const std::string& content) {
+        std::regex img_regex("\\[CQ:image[^\\]]*\\]");
+        return std::regex_replace(content, img_regex, "");
+    }
+    
     bool handleChat(const MessageEvent& event, const std::string& content) {
         LOG_INFO("[AI] Chat: " + content.substr(0, 50) + "...");
         
         std::string sender_name = event.sender.card.empty() ? event.sender.nickname : event.sender.card;
         
+        std::vector<ImageData> images = extractImages(event.raw_message);
+        std::string text_content = removeImageCQ(content);
+        text_content = trim(text_content);
+        
+        if (text_content.empty() && !images.empty()) {
+            text_content = "请描述这张图片";
+        }
+        
         std::string response;
-        if (event.isGroup()) {
-            response = AIService::instance().chat(content, event.group_id, event.user_id, sender_name);
+        if (!images.empty()) {
+            LOG_INFO("[AI] Processing " + std::to_string(images.size()) + " images");
+            if (event.isGroup()) {
+                response = AIService::instance().chatWithImages(text_content, images, event.group_id, event.user_id, sender_name);
+            } else {
+                response = AIService::instance().chatWithImages(text_content, images, 0, event.user_id, sender_name);
+            }
         } else {
-            response = AIService::instance().chat(content, 0, event.user_id, sender_name);
+            if (event.isGroup()) {
+                response = AIService::instance().chat(text_content, event.group_id, event.user_id, sender_name);
+            } else {
+                response = AIService::instance().chat(text_content, 0, event.user_id, sender_name);
+            }
         }
         
         if (response.empty()) {
+            ErrorCode err = AIService::instance().getLastError();
+            std::string user_msg = ErrorSystem::instance().formatUserError(err);
+            std::string detail = AIService::instance().getLastErrorDetail();
+            if (err == ErrorCode::AI_API_QUOTA_EXHAUSTED) {
+                user_msg += ",请管理员切换模型(/model)";
+                if (!detail.empty()) user_msg += " | 配额恢复: " + detail;
+            }
+            replyTo(event, user_msg);
+            AIService::instance().clearLastError();
+            return true;
+        }
+        
+        if (event.isGroup()) {
+            AIService::instance().updateGroupConversation(event.group_id);
+        }
+        
+        response = filterCQCodes(response);
+        
+        const auto& grok_images = AIService::instance().getLastImages();
+        if (!grok_images.empty()) {
+            replyTo(event, response);
+            for (const auto& img_url : grok_images) {
+                std::string local_path = AIService::instance().downloadAndSaveImage(img_url);
+                if (!local_path.empty()) {
+                    std::string img_msg = "[CQ:image,file=file:///" + local_path + "]";
+                    reply(event, img_msg);
+                }
+            }
+        } else {
+            replyTo(event, response);
+        }
+        return true;
+    }
+    
+    bool handleImageGeneration(const MessageEvent& event, const std::string& prompt) {
+        LOG_INFO("[AI] Image generation request: " + prompt.substr(0, 50) + "...");
+        
+        std::vector<ImageData> source_images = extractImages(event.raw_message);
+        
+        GeneratedImage result = AIService::instance().generateImage(prompt, source_images);
+        
+        if (result.base64.empty() && result.text.empty()) {
             ErrorCode err = AIService::instance().getLastError();
             std::string user_msg = ErrorSystem::instance().formatUserError(err);
             replyTo(event, user_msg);
@@ -265,8 +423,23 @@ private:
             return true;
         }
         
-        response = filterCQCodes(response);
-        replyTo(event, response);
+        if (!result.base64.empty()) {
+            std::string saved_path = AIService::instance().saveBase64Image(result.base64, result.media_type);
+            if (!saved_path.empty()) {
+                std::string abs_path = std::filesystem::absolute(saved_path).string();
+                std::string img_msg = "[CQ:image,file=file:///" + abs_path + "]";
+                if (!result.text.empty()) {
+                    img_msg = filterCQCodes(result.text) + "\n" + img_msg;
+                }
+                reply(event, img_msg);
+                LOG_INFO("[AI] Sent generated image: " + abs_path);
+            } else {
+                replyTo(event, "图片保存失败");
+            }
+        } else if (!result.text.empty()) {
+            replyTo(event, filterCQCodes(result.text));
+        }
+        
         return true;
     }
     

@@ -48,6 +48,9 @@ config.ini
 Thumbs.db
 .DS_Store
 
+# Third-party plugins
+plugins/astrbot_plugin_touchi/
+
 # Temp
 *.tmp
 *.temp

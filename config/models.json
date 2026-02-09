@@ -1,6 +1,33 @@
 {
-    "current": "gemini2.5",
+    "current": "claude-sonnet",
+    "api_key": "",
     "models": {
+        "claude-sonnet": {
+            "name": "Claude Sonnet 4",
+            "url": "https://apiserver.alcex.cn/v1/chat/completions",
+            "description": "Claude Sonnet 4 via OpenAI兼容API",
+            "format": "openai",
+            "model_name": "claude-sonnet-4",
+            "api_key": "YOUR_API_KEY_HERE"
+        },
+        "grok": {
+            "name": "Grok",
+            "url": "http://localhost:5000/ask",
+            "description": "Grok本地桥接服务，支持图片生成",
+            "format": "grok"
+        },
+        "gemini-3-pro-image": {
+            "name": "Gemini 3 Pro Image",
+            "url": "http://localhost:8317/v1/messages",
+            "description": "Gemini 3 Pro Image，支持图片生成",
+            "format": "messages"
+        },
+        "gemini-3-pro-high": {
+            "name": "Gemini 3 Pro High",
+            "url": "http://localhost:8080/v1/messages",
+            "description": "本地Gemini代理服务",
+            "format": "messages"
+        },
         "gemini2.5": {
             "name": "Gemini 2.5",
             "url": "YOUR_GEMINI_API_URL",
