@@ -32,7 +32,10 @@
 
         body {
             font-family: 'Inter', 'Noto Sans SC', sans-serif;
-            background: url('https://api.jkyai.top/API/acgdmbz.php') no-repeat center center fixed;
+            background: var(--page-bg, radial-gradient(circle at top, rgba(99, 102, 241, 0.18), transparent 42%), linear-gradient(135deg, #0f172a, #1e293b));
+            background-repeat: no-repeat;
+            background-position: center center;
+            background-attachment: fixed;
             background-size: cover;
             color: var(--text-main);
             min-height: 100vh;
@@ -50,7 +53,9 @@
             left: 0;
             width: 100%;
             height: 100%;
-            background: rgba(0, 0, 0, 0.4);
+            background:
+                linear-gradient(180deg, rgba(6, 10, 20, 0.12), rgba(6, 10, 20, 0.24)),
+                radial-gradient(circle at top right, rgba(99, 102, 241, 0.08), transparent 32%);
             z-index: -1;
         }
 
@@ -106,6 +111,36 @@
         .lang-btn:hover {
             background: rgba(255, 255, 255, 0.1);
             transform: translateY(-2px);
+        }
+
+        .status-btn {
+            min-width: 160px;
+            justify-content: center;
+        }
+
+        .status-btn.authenticated {
+            border-color: rgba(16, 185, 129, 0.45);
+            color: #d1fae5;
+        }
+
+        .status-btn.readonly {
+            border-color: rgba(96, 165, 250, 0.45);
+            color: #dbeafe;
+        }
+
+        .status-btn.open {
+            border-color: rgba(16, 185, 129, 0.45);
+            color: #a7f3d0;
+        }
+
+        .status-btn.required {
+            border-color: rgba(239, 68, 68, 0.45);
+            color: #fecaca;
+        }
+
+        .status-btn.unknown {
+            border-color: rgba(156, 163, 175, 0.45);
+            color: #e5e7eb;
         }
 
         .container {
@@ -286,6 +321,14 @@
             background: rgba(16, 185, 129, 0.3);
         }
 
+        .btn:disabled,
+        .btn[disabled] {
+            cursor: not-allowed;
+            opacity: 0.45;
+            transform: none;
+            pointer-events: none;
+        }
+
         .status-dot {
             width: 8px;
             height: 8px;
@@ -347,6 +390,24 @@
             border: 1px solid rgba(96, 165, 250, 0.4);
         }
 
+        .tag-ok {
+            background: rgba(16, 185, 129, 0.18);
+            color: #6ee7b7;
+            border: 1px solid rgba(16, 185, 129, 0.35);
+        }
+
+        .tag-warning {
+            background: rgba(245, 158, 11, 0.18);
+            color: #fbbf24;
+            border: 1px solid rgba(245, 158, 11, 0.35);
+        }
+
+        .tag-error {
+            background: rgba(239, 68, 68, 0.18);
+            color: #fca5a5;
+            border: 1px solid rgba(239, 68, 68, 0.35);
+        }
+
         /* Progress Bars (for Cache/Memory) */
         .progress-bar {
             height: 6px;
@@ -396,6 +457,9 @@
             <p data-i18n="manage_framework">QQ Bot Framework Management</p>
         </div>
         <div class="actions">
+            <button id="auth-status-btn" class="lang-btn status-btn unknown" onclick="manageAdminToken()">
+                <i class="ri-shield-keyhole-line"></i> <span id="auth-status-text">鉴权状态未知</span>
+            </button>
             <button class="lang-btn" onclick="toggleLanguage()">
                 <i class="ri-translate-2"></i> <span id="current-lang">EN/中文</span>
             </button>
@@ -422,7 +486,7 @@
                     </div>
                     <div class="stat-item">
                         <div class="value" id="total-personalities">0</div>
-                        <div class="label" data-i18n="personalities">Personalities</div>
+                        <div class="label" data-i18n="persona_files">Persona Files</div>
                     </div>
                 </div>
             </div>
@@ -433,10 +497,24 @@
                 <div class="list" id="plugin-list"></div>
             </div>
 
-            <!-- Personalities -->
+            <!-- Persona Files -->
             <div class="card">
-                <h2 data-i18n="personalities"><i class="ri-user-smile-line"></i> Personalities</h2>
+                <h2 data-i18n="persona_files"><i class="ri-user-smile-line"></i> Persona Files</h2>
+                <p id="persona-directory-info" style="color:var(--text-muted);margin-bottom:1rem;font-size:0.8rem">config/personalities (*.persona.md)</p>
+                <div id="persona-validation-summary" style="color:var(--text-muted);margin-bottom:1rem;font-size:0.8rem">校验中...</div>
+                <button id="reload-system-btn" class="btn btn-primary" data-write-action="true" style="width:100%;justify-content:center;margin-bottom:1rem" onclick="reloadSystem()">
+                    <i class="ri-restart-line"></i> <span data-i18n="reload_system">重载插件与人格</span>
+                </button>
                 <div class="list" id="personality-list"></div>
+                <div style="margin-top:1rem">
+                    <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:0.5rem" data-i18n="persona_issues">校验问题</div>
+                    <div class="list" id="persona-issue-list" style="max-height:180px"></div>
+                </div>
+                <div style="margin-top:1rem">
+                    <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:0.5rem" data-i18n="persona_reload_changes">最近一次重载变化</div>
+                    <div id="persona-reload-summary" style="color:var(--text-muted);margin-bottom:0.75rem;font-size:0.8rem" data-i18n="persona_reload_idle">尚未执行重载</div>
+                    <div class="list" id="persona-reload-list" style="max-height:180px"></div>
+                </div>
             </div>
 
             <!-- Active Groups -->
@@ -521,7 +599,7 @@
                 <h2 data-i18n="prometheus"><i class="ri-line-chart-line"></i> Prometheus Metrics</h2>
                 <p style="color:var(--text-muted);margin-bottom:1rem" data-i18n="prometheus_desc">Export metrics in
                     Prometheus format for external monitoring systems.</p>
-                <a href="/metrics" target="_blank" class="btn btn-primary" style="width:100%;justify-content:center">
+                <a id="metrics-link" href="/metrics" target="_blank" class="btn btn-primary" style="width:100%;justify-content:center">
                     <i class="ri-external-link-line"></i> <span data-i18n="view_metrics">View /metrics</span>
                 </a>
             </div>
@@ -540,11 +618,29 @@
                 total_calls: "API 调用总数",
                 active_groups: "活跃群组",
                 plugins: "插件列表",
-                personalities: "人格列表",
+                persona_files: "人格文件",
+                persona_issues: "校验问题",
+                persona_validation_clean: "未发现校验问题",
+                persona_validation_summary: "已扫描 {discovered} 个文件，成功加载 {loaded} 个，错误 {errors}，警告 {warnings}",
+                persona_reload_changes: "最近一次重载变化",
+                persona_reload_idle: "尚未执行重载",
+                persona_reload_clean: "本次重载未发现人格文件变化",
+                persona_reload_summary: "本次重载：新增 {added}，移除 {removed}，变化 {changed}，未变化 {unchanged}",
+                reload_system: "重载插件与人格",
                 enable: "启用",
                 disable: "禁用",
                 group: "群组",
-                personality: "人格",
+                active_persona: "生效人格",
+                persona_id: "文件 ID",
+                persona_file: "文件",
+                persona_status_before: "重载前",
+                persona_status_after: "重载后",
+                persona_status_ok: "正常",
+                persona_status_warning: "警告",
+                persona_status_error: "错误",
+                persona_change_added: "新增",
+                persona_change_removed: "移除",
+                persona_change_changed: "变化",
                 calls: "调用",
                 version: "版本",
                 author: "作者",
@@ -566,6 +662,11 @@
                 prometheus: "Prometheus 指标",
                 prometheus_desc: "导出 Prometheus 格式指标供外部监控系统使用。",
                 view_metrics: "查看 /metrics",
+                auth_unknown: "鉴权状态未知",
+                auth_authenticated: "已带管理令牌",
+                auth_readonly: "匿名只读",
+                auth_required: "需要管理令牌",
+                auth_open: "无需令牌，可写",
                 enterprise_monitoring: "企业级监控",
                 enterprise_cache_hits: "缓存命中率",
                 enterprise_cache_misses: "缓存未命中率",
@@ -579,11 +680,29 @@
                 total_calls: "Total Calls",
                 active_groups: "Active Groups",
                 plugins: "Plugins",
-                personalities: "Personalities",
+                persona_files: "Persona Files",
+                persona_issues: "Validation Issues",
+                persona_validation_clean: "No validation issues found",
+                persona_validation_summary: "Scanned {discovered} files, loaded {loaded}, errors {errors}, warnings {warnings}",
+                persona_reload_changes: "Latest Reload Changes",
+                persona_reload_idle: "No reload executed yet",
+                persona_reload_clean: "No persona file changes detected in this reload",
+                persona_reload_summary: "Reload result: added {added}, removed {removed}, changed {changed}, unchanged {unchanged}",
+                reload_system: "Reload Plugins & Personas",
                 enable: "Enable",
                 disable: "Disable",
                 group: "Group",
-                personality: "Personality",
+                active_persona: "Active Persona",
+                persona_id: "File ID",
+                persona_file: "File",
+                persona_status_before: "Before",
+                persona_status_after: "After",
+                persona_status_ok: "OK",
+                persona_status_warning: "Warning",
+                persona_status_error: "Error",
+                persona_change_added: "Added",
+                persona_change_removed: "Removed",
+                persona_change_changed: "Changed",
                 calls: "Calls",
                 version: "v",
                 author: "by",
@@ -604,11 +723,22 @@
                 sandbox_status: "Sandbox Status",
                 prometheus: "Prometheus Metrics",
                 prometheus_desc: "Export metrics in Prometheus format for external monitoring systems.",
-                view_metrics: "View /metrics"
+                view_metrics: "View /metrics",
+                auth_unknown: "Auth Unknown",
+                auth_authenticated: "Token Attached",
+                auth_readonly: "Anonymous Readonly",
+                auth_required: "Token Required",
+                auth_open: "Open Write Access"
             }
         };
 
         let currentLang = 'zh';
+        const adminTokenStorageKey = 'lchbot_admin_token';
+        let adminToken = '';
+        let authPromptVisible = false;
+        let authState = 'unknown';
+        let authCapabilities = null;
+        let lastPersonaReloadDiff = null;
 
         function updateTexts() {
             const t = translations[currentLang];
@@ -628,6 +758,8 @@
                 }
             });
             document.getElementById('current-lang').textContent = currentLang === 'zh' ? 'English' : '简体中文';
+            updateAuthStatusButton();
+            renderPersonaReloadDiff();
             // Reload lists to translate dynamic content buttons/labels
             loadAll();
         }
@@ -637,14 +769,202 @@
             updateTexts();
         }
 
-        // API Mock fallback if fetch fails during dev/preview
-        function api(path) {
-            return fetch('/api' + path)
-                .then(res => res.json())
+        function storeAdminToken(token) {
+            adminToken = (token || '').trim();
+            if (adminToken) {
+                localStorage.setItem(adminTokenStorageKey, adminToken);
+                authState = 'authenticated';
+            } else {
+                localStorage.removeItem(adminTokenStorageKey);
+                authState = 'unknown';
+            }
+            updateMetricsLink();
+            updateAuthStatusButton();
+        }
+
+        function bootstrapAdminToken() {
+            const currentUrl = new URL(window.location.href);
+            const queryToken = currentUrl.searchParams.get('token');
+            const hashToken = new URLSearchParams(window.location.hash.slice(1)).get('token');
+            const storedToken = localStorage.getItem(adminTokenStorageKey) || '';
+            const resolvedToken = queryToken || hashToken || storedToken;
+
+            if (queryToken) {
+                currentUrl.searchParams.delete('token');
+                const normalizedQuery = currentUrl.searchParams.toString();
+                history.replaceState(
+                    null,
+                    '',
+                    currentUrl.pathname + (normalizedQuery ? '?' + normalizedQuery : '') + currentUrl.hash
+                );
+            }
+
+            storeAdminToken(resolvedToken);
+        }
+
+        function promptForAdminToken() {
+            if (authPromptVisible) {
+                return false;
+            }
+
+            authPromptVisible = true;
+            const promptText = currentLang === 'zh'
+                ? '请输入管理令牌，留空可清除'
+                : 'Enter admin token, leave blank to clear';
+            const nextToken = window.prompt(promptText, adminToken || '');
+            authPromptVisible = false;
+
+            if (nextToken === null) {
+                return false;
+            }
+
+            storeAdminToken(nextToken);
+            return !!adminToken;
+        }
+
+        function manageAdminToken() {
+            promptForAdminToken();
+        }
+
+        function canPerformWrite() {
+            if (!authCapabilities) {
+                return !!adminToken;
+            }
+
+            if (!authCapabilities.write_requires_token) {
+                return true;
+            }
+
+            return !!adminToken;
+        }
+
+        function updateMetricsLink() {
+            const link = document.getElementById('metrics-link');
+            if (!link) {
+                return;
+            }
+
+            link.href = adminToken
+                ? '/metrics?token=' + encodeURIComponent(adminToken)
+                : '/metrics';
+        }
+
+        function updateAuthStatusButton() {
+            const button = document.getElementById('auth-status-btn');
+            const text = document.getElementById('auth-status-text');
+            if (!button || !text) {
+                return;
+            }
+
+            const t = translations[currentLang];
+            let effectiveState = authState;
+            if (authCapabilities && !authCapabilities.write_requires_token) {
+                effectiveState = 'open';
+            } else if (adminToken) {
+                effectiveState = 'authenticated';
+            } else if (effectiveState === 'authenticated') {
+                effectiveState = 'unknown';
+            }
+
+            button.classList.remove('authenticated', 'readonly', 'required', 'unknown', 'open');
+            button.classList.add(effectiveState);
+
+            const labelMap = {
+                authenticated: t.auth_authenticated,
+                readonly: t.auth_readonly,
+                required: t.auth_required,
+                open: t.auth_open,
+                unknown: t.auth_unknown
+            };
+            text.textContent = labelMap[effectiveState] || t.auth_unknown;
+        }
+
+        function updateWriteActionState() {
+            const writeAllowed = canPerformWrite();
+
+            document.querySelectorAll('[data-write-action="true"]').forEach(button => {
+                button.disabled = !writeAllowed;
+                button.title = writeAllowed
+                    ? ''
+                    : (currentLang === 'zh' ? '当前为只读访问，需管理令牌' : 'Readonly access, admin token required');
+            });
+        }
+
+        function applyAuthCapabilities(data) {
+            if (!data) {
+                return;
+            }
+
+            authCapabilities = data;
+            if (!data.write_requires_token) {
+                authState = 'open';
+            } else if (adminToken) {
+                authState = 'authenticated';
+            } else if (data.public_readonly) {
+                authState = 'readonly';
+            } else {
+                authState = 'required';
+            }
+
+            updateAuthStatusButton();
+            updateWriteActionState();
+        }
+
+        function request(path, options = {}, allowRetry = true) {
+            const headers = new Headers(options.headers || {});
+            if (adminToken) {
+                headers.set('X-Admin-Token', adminToken);
+            }
+
+            return fetch(path, { ...options, headers })
+                .then(res => {
+                    if (res.status === 401) {
+                        authState = 'required';
+                        updateAuthStatusButton();
+                        if (allowRetry && promptForAdminToken()) {
+                            setTimeout(loadAll, 0);
+                            return request(path, options, false);
+                        }
+                        return null;
+                    }
+
+                    if (!res.ok) {
+                        throw new Error('HTTP ' + res.status);
+                    }
+
+                    if (!authCapabilities) {
+                        authState = adminToken ? 'authenticated' : 'readonly';
+                    } else if (!authCapabilities.write_requires_token) {
+                        authState = 'open';
+                    } else {
+                        authState = adminToken ? 'authenticated' : 'readonly';
+                    }
+                    updateAuthStatusButton();
+                    updateWriteActionState();
+
+                    const contentType = res.headers.get('content-type') || '';
+                    if (contentType.includes('application/json')) {
+                        return res.json();
+                    }
+
+                    return res.text();
+                })
                 .catch(err => {
                     console.warn('API Fetch failed, using mock data for UI demo', err);
                     return null;
                 });
+        }
+
+        function api(path, options = {}) {
+            return request('/api' + path, options);
+        }
+
+        function loadAuthCapabilities() {
+            api('/auth').then(data => {
+                if (data) {
+                    applyAuthCapabilities(data);
+                }
+            });
         }
 
         function loadStats() {
@@ -653,7 +973,7 @@
                     document.getElementById('total-calls').textContent = data.total_calls || 0;
                     document.getElementById('active-groups').textContent = data.active_groups || 0;
                     document.getElementById('total-plugins').textContent = data.total_plugins || 0;
-                    document.getElementById('total-personalities').textContent = data.total_personalities || 0;
+                    document.getElementById('total-personalities').textContent = data.total_persona_files || 0;
                 }
             });
         }
@@ -668,6 +988,7 @@
                         const btnClass = p.enabled ? 'btn-danger' : 'btn-success';
                         const btnText = p.enabled ? t.disable : t.enable;
                         const statusClass = p.enabled ? 'online' : 'offline';
+                        const disabledAttr = canPerformWrite() ? '' : 'disabled title="' + (currentLang === 'zh' ? '当前为只读访问，需管理令牌' : 'Readonly access, admin token required') + '"';
 
                         html += `
                             <div class="list-item">
@@ -678,7 +999,7 @@
                                         <div class="info">${t.version}${p.version} ${t.author} ${p.author}</div>
                                     </div>
                                 </div>
-                                <button class="btn ${btnClass}" onclick="togglePlugin('${p.name}', ${!p.enabled})">
+                                <button class="btn ${btnClass}" data-write-action="true" ${disabledAttr} onclick="togglePlugin('${p.name}', ${!p.enabled})">
                                     <i class="${p.enabled ? 'ri-stop-circle-line' : 'ri-play-circle-line'}"></i> ${btnText}
                                 </button>
                             </div>
@@ -692,24 +1013,130 @@
         function loadPersonalities() {
             api('/personalities').then(data => {
                 const list = document.getElementById('personality-list');
-                if (data && data.personalities) {
+                const info = document.getElementById('persona-directory-info');
+                const summary = document.getElementById('persona-validation-summary');
+                const issueList = document.getElementById('persona-issue-list');
+                const t = translations[currentLang];
+                if (data && data.persona_files) {
+                    if (info) {
+                        const directory = data.persona_directory || 'config/personalities';
+                        const pattern = data.persona_pattern || '*.persona.md';
+                        info.textContent = directory + ' (' + pattern + ')';
+                    }
+                    if (summary && data.validation) {
+                        summary.textContent = t.persona_validation_summary
+                            .replace('{discovered}', data.validation.discovered_files || 0)
+                            .replace('{loaded}', data.validation.loaded_files || 0)
+                            .replace('{errors}', data.validation.errors || 0)
+                            .replace('{warnings}', data.validation.warnings || 0);
+                    }
                     let html = '';
-                    data.personalities.forEach(p => {
+                    data.persona_files.forEach(p => {
+                        const statusText = t['persona_status_' + p.status] || p.status;
+                        const tagClass = p.status === 'error'
+                            ? 'tag-error'
+                            : (p.status === 'warning' ? 'tag-warning' : 'tag-ok');
                         html += `
                             <div class="list-item">
                                 <div class="content">
                                     <i class="ri-user-3-line" style="color:var(--primary-color)"></i>
                                     <div>
-                                        <div class="name">${p.name}</div>
-                                        <div class="info">ID: ${p.id}</div>
+                                        <div class="name">${p.name || p.file}<span class="tag ${tagClass}" style="margin-left:0.5rem">${statusText}</span></div>
+                                        <div class="info">${t.persona_id}: ${p.id || '-'} | ${t.persona_file}: ${p.file}</div>
                                     </div>
                                 </div>
                             </div>
                         `;
                     });
                     list.innerHTML = html;
+
+                    if (issueList) {
+                        if (data.issues && data.issues.length > 0) {
+                            let issueHtml = '';
+                            data.issues.forEach(issue => {
+                                const tagClass = issue.severity === 'error' ? 'tag-error' : 'tag-warning';
+                                const tagText = issue.severity === 'error' ? t.persona_status_error : t.persona_status_warning;
+                                issueHtml += `
+                                    <div class="list-item" style="align-items:flex-start">
+                                        <div class="content">
+                                            <div>
+                                                <div class="name"><span class="tag ${tagClass}">${tagText}</span> ${issue.file || '-'}</div>
+                                                <div class="info">${issue.message}</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                `;
+                            });
+                            issueList.innerHTML = issueHtml;
+                        } else {
+                            issueList.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:1rem">' + t.persona_validation_clean + '</div>';
+                        }
+                    }
                 }
+                renderPersonaReloadDiff();
             });
+        }
+
+        function renderPersonaReloadDiff() {
+            const summary = document.getElementById('persona-reload-summary');
+            const list = document.getElementById('persona-reload-list');
+            const t = translations[currentLang];
+            if (!summary || !list) {
+                return;
+            }
+
+            if (!lastPersonaReloadDiff) {
+                summary.textContent = t.persona_reload_idle;
+                list.innerHTML = '';
+                return;
+            }
+
+            summary.textContent = t.persona_reload_summary
+                .replace('{added}', lastPersonaReloadDiff.added || 0)
+                .replace('{removed}', lastPersonaReloadDiff.removed || 0)
+                .replace('{changed}', lastPersonaReloadDiff.changed || 0)
+                .replace('{unchanged}', lastPersonaReloadDiff.unchanged || 0);
+
+            if (!lastPersonaReloadDiff.changes || lastPersonaReloadDiff.changes.length === 0) {
+                list.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:1rem">' + t.persona_reload_clean + '</div>';
+                return;
+            }
+
+            let html = '';
+            lastPersonaReloadDiff.changes.forEach(change => {
+                let tagClass = 'tag-warning';
+                let tagText = t.persona_change_changed;
+                if (change.change_type === 'added') {
+                    tagClass = 'tag-ok';
+                    tagText = t.persona_change_added;
+                } else if (change.change_type === 'removed') {
+                    tagClass = 'tag-error';
+                    tagText = t.persona_change_removed;
+                }
+
+                const beforeStatus = change.previous_status
+                    ? (t['persona_status_' + change.previous_status] || change.previous_status)
+                    : '-';
+                const afterStatus = change.current_status
+                    ? (t['persona_status_' + change.current_status] || change.current_status)
+                    : '-';
+                const displayName = change.name || change.file || change.persona_id || '-';
+                const displayFile = change.file || '-';
+                const displayId = change.persona_id || '-';
+
+                html += `
+                    <div class="list-item" style="align-items:flex-start">
+                        <div class="content">
+                            <div>
+                                <div class="name"><span class="tag ${tagClass}">${tagText}</span> ${displayName}</div>
+                                <div class="info">${t.persona_file}: ${displayFile} | ${t.persona_id}: ${displayId}</div>
+                                <div class="info">${t.persona_status_before}: ${beforeStatus} | ${t.persona_status_after}: ${afterStatus}</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+            list.innerHTML = html;
         }
 
         function loadGroups() {
@@ -725,7 +1152,7 @@
                                     <i class="ri-hashtag" style="color:var(--text-muted)"></i>
                                     <div>
                                         <div class="name">${t.group} ${g.id}</div>
-                                        <div class="info">${t.personality}: ${g.personality} | ${t.calls}: ${g.calls}</div>
+                                        <div class="info">${t.active_persona}: ${g.personality} | ${t.calls}: ${g.calls}</div>
                                     </div>
                                 </div>
                             </div>
@@ -737,9 +1164,37 @@
         }
 
         function togglePlugin(name, enable) {
-            fetch('/api/plugins/' + name + '/' + (enable ? 'enable' : 'disable'), { method: 'POST' }).then(() => {
+            if (!canPerformWrite()) {
+                manageAdminToken();
+                return;
+            }
+            api('/plugins/' + name + '/' + (enable ? 'enable' : 'disable'), { method: 'POST' }).then(() => {
                 loadPlugins();
                 loadStats();
+            });
+        }
+
+        function reloadSystem() {
+            if (!canPerformWrite()) {
+                manageAdminToken();
+                return;
+            }
+
+            const button = document.getElementById('reload-system-btn');
+            if (button) {
+                button.disabled = true;
+            }
+
+            api('/reload', { method: 'POST' }).then(data => {
+                if (data && data.persona_diff) {
+                    lastPersonaReloadDiff = data.persona_diff;
+                    renderPersonaReloadDiff();
+                }
+                loadAll();
+            }).finally(() => {
+                if (button) {
+                    button.disabled = !canPerformWrite();
+                }
             });
         }
 
@@ -836,13 +1291,65 @@
         }
 
         function clearCache() {
-            fetch('/api/cache/clear', { method: 'POST' }).then(() => {
+            if (!canPerformWrite()) {
+                manageAdminToken();
+                return;
+            }
+            api('/cache/clear', { method: 'POST' }).then(() => {
                 loadCache();
                 loadMetrics();
             });
         }
 
+        function preloadImage(url) {
+            return new Promise((resolve, reject) => {
+                if (!url) {
+                    reject(new Error('empty image url'));
+                    return;
+                }
+
+                const image = new Image();
+                image.referrerPolicy = 'no-referrer';
+                image.onload = () => resolve(url);
+                image.onerror = () => reject(new Error('image load failed'));
+                image.src = url;
+            });
+        }
+
+        async function loadBackgroundWallpaper() {
+            const fallbackUrl = 'https://picsum.photos/1920/1080?random=' + Date.now();
+
+            try {
+                const response = await fetch('https://cn.bing.com/HPImageArchive.aspx?format=js&idx=0&n=1&mkt=zh-CN', {
+                    cache: 'no-store'
+                });
+                if (!response.ok) {
+                    throw new Error('bing http ' + response.status);
+                }
+
+                const data = await response.json();
+                const item = data && data.images && data.images[0];
+                const rawUrl = item && item.url ? item.url : '';
+                const absoluteUrl = rawUrl.startsWith('http') ? rawUrl : ('https://cn.bing.com' + rawUrl);
+                const wallpaperUrl = absoluteUrl + (absoluteUrl.includes('?') ? '&' : '?') + 'rf=LaDigue_1920x1080.jpg';
+                const loadedUrl = await preloadImage(wallpaperUrl);
+                document.body.style.setProperty('--page-bg', `url("${loadedUrl}")`);
+                return;
+            } catch (err) {
+                console.warn('Bing wallpaper fetch failed, falling back to Picsum', err);
+            }
+
+            try {
+                const loadedFallback = await preloadImage(fallbackUrl);
+                document.body.style.setProperty('--page-bg', `url("${loadedFallback}")`);
+            } catch (err) {
+                console.warn('Fallback wallpaper fetch failed, using built-in gradient only', err);
+                document.body.style.removeProperty('--page-bg');
+            }
+        }
+
         function loadAll() {
+            loadAuthCapabilities();
             loadStats();
             loadPlugins();
             loadPersonalities();
@@ -853,9 +1360,10 @@
             loadSandbox();
         }
 
-        // Initialize
-        updateTexts(); // Set initial language
-        loadAll();
+        bootstrapAdminToken();
+        loadBackgroundWallpaper();
+        updateTexts();
+        updateWriteActionState();
         setInterval(loadAll, 10000);
     </script>
 </body>

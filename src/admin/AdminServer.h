@@ -7,6 +7,9 @@
 #include <atomic>
 #include <mutex>
 #include <sstream>
+#include <fstream>
+#include <cctype>
+#include <cstdlib>
 #include "../core/Logger.h"
 #include "../core/JsonParser.h"
 
@@ -20,17 +23,36 @@ namespace LCHBOT {
 
 class AdminServer {
 public:
-    using RequestHandler = std::function<std::string(const std::string& method, const std::string& path, const std::string& body)>;
+    struct HttpResponse {
+        int status = 200;
+        std::string content_type = "application/json; charset=utf-8";
+        std::string body;
+    };
+
+    using RequestHandler = std::function<HttpResponse(const std::string& method, const std::string& path, const std::string& body)>;
     
     static AdminServer& instance() {
         static AdminServer inst;
         return inst;
     }
     
-    bool start(int port = 8080) {
+    bool start(
+        const std::string& host = "127.0.0.1",
+        int port = 8080,
+        const std::string& auth_token = "",
+        bool allow_public_readonly = false
+    ) {
         if (running_) return true;
         
+        bind_host_ = host.empty() ? "127.0.0.1" : host;
         port_ = port;
+        auth_token_ = auth_token;
+        allow_public_readonly_ = allow_public_readonly;
+
+        if (auth_token_.empty() && !isLoopbackHost(bind_host_)) {
+            LOG_ERROR("[Admin] Refusing non-local admin bind without admin_token");
+            return false;
+        }
         
 #ifdef _WIN32
         WSADATA wsaData;
@@ -51,12 +73,23 @@ public:
         
         sockaddr_in addr = {};
         addr.sin_family = AF_INET;
-        addr.sin_addr.s_addr = INADDR_ANY;
+        if (inet_pton(AF_INET, bind_host_.c_str(), &addr.sin_addr) <= 0) {
+            struct hostent* host_entry = gethostbyname(bind_host_.c_str());
+            if (host_entry == nullptr) {
+                LOG_ERROR("[Admin] Failed to resolve host: " + bind_host_);
+                closesocket(server_socket_);
+                server_socket_ = INVALID_SOCKET;
+                WSACleanup();
+                return false;
+            }
+            addr.sin_addr = *reinterpret_cast<in_addr*>(host_entry->h_addr);
+        }
         addr.sin_port = htons(port);
         
         if (bind(server_socket_, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
-            LOG_ERROR("[Admin] Failed to bind port " + std::to_string(port));
+            LOG_ERROR("[Admin] Failed to bind " + bind_host_ + ":" + std::to_string(port));
             closesocket(server_socket_);
+            server_socket_ = INVALID_SOCKET;
             WSACleanup();
             return false;
         }
@@ -71,7 +104,7 @@ public:
         running_ = true;
         server_thread_ = std::thread(&AdminServer::serverLoop, this);
         
-        LOG_INFO("[Admin] Server started on http://127.0.0.1:" + std::to_string(port));
+        LOG_INFO("[Admin] Server started on http://" + bind_host_ + ":" + std::to_string(port));
         return true;
 #else
         return false;
@@ -139,39 +172,73 @@ private:
     
     std::string processRequest(const std::string& request) {
         std::string method, path, body;
-        parseHttpRequest(request, method, path, body);
-        
-        if (path == "/" || path == "/index.html") {
+        std::map<std::string, std::string> headers;
+        parseHttpRequest(request, method, path, body, headers);
+
+        std::string handler_path = stripQueryString(path);
+
+        if (handler_path == "/" || handler_path == "/index.html") {
             return buildHtmlResponse(getAdminPage());
+        }
+
+        if (isProtectedPath(handler_path, method) && !isAuthorized(path, method, handler_path, headers)) {
+            if (handler_path == "/metrics") {
+                return buildTextResponse({401, "text/plain; charset=utf-8", "Unauthorized\n"});
+            }
+            return buildJsonResponse("{\"error\":\"Unauthorized\"}", 401);
         }
         
         std::lock_guard<std::mutex> lock(mutex_);
         
-        std::string handler_path = path;
-        size_t query_pos = path.find('?');
-        if (query_pos != std::string::npos) {
-            handler_path = path.substr(0, query_pos);
-        }
-        
         auto it = handlers_.find(handler_path);
         if (it != handlers_.end()) {
-            std::string result = it->second(method, path, body);
-            return buildJsonResponse(result);
+            return buildHandlerResponse(it->second(method, path, body));
         }
         
         for (const auto& [prefix, handler] : handlers_) {
             if (handler_path.find(prefix) == 0) {
-                std::string result = handler(method, path, body);
-                return buildJsonResponse(result);
+                return buildHandlerResponse(handler(method, path, body));
             }
         }
         
         return buildJsonResponse("{\"error\":\"Not found\"}", 404);
     }
     
-    void parseHttpRequest(const std::string& request, std::string& method, std::string& path, std::string& body) {
+    void parseHttpRequest(
+        const std::string& request,
+        std::string& method,
+        std::string& path,
+        std::string& body,
+        std::map<std::string, std::string>& headers
+    ) {
         std::istringstream iss(request);
-        iss >> method >> path;
+        std::string request_line;
+        std::getline(iss, request_line);
+        if (!request_line.empty() && request_line.back() == '\r') {
+            request_line.pop_back();
+        }
+
+        std::istringstream request_line_stream(request_line);
+        request_line_stream >> method >> path;
+
+        std::string header_line;
+        while (std::getline(iss, header_line)) {
+            if (!header_line.empty() && header_line.back() == '\r') {
+                header_line.pop_back();
+            }
+            if (header_line.empty()) {
+                break;
+            }
+
+            size_t colon_pos = header_line.find(':');
+            if (colon_pos == std::string::npos) {
+                continue;
+            }
+
+            std::string key = toLower(trim(header_line.substr(0, colon_pos)));
+            std::string value = trim(header_line.substr(colon_pos + 1));
+            headers[key] = value;
+        }
         
         size_t body_start = request.find("\r\n\r\n");
         if (body_start != std::string::npos) {
@@ -180,13 +247,10 @@ private:
     }
     
     std::string buildJsonResponse(const std::string& json, int status = 200) {
-        std::string status_text = (status == 200) ? "OK" : "Not Found";
+        std::string status_text = getStatusText(status);
         std::ostringstream oss;
         oss << "HTTP/1.1 " << status << " " << status_text << "\r\n";
         oss << "Content-Type: application/json; charset=utf-8\r\n";
-        oss << "Access-Control-Allow-Origin: *\r\n";
-        oss << "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS\r\n";
-        oss << "Access-Control-Allow-Headers: Content-Type\r\n";
         oss << "Content-Length: " << json.length() << "\r\n";
         oss << "\r\n";
         oss << json;
@@ -202,11 +266,180 @@ private:
         oss << html;
         return oss.str();
     }
+
+    std::string buildTextResponse(const HttpResponse& response) {
+        std::ostringstream oss;
+        oss << "HTTP/1.1 " << response.status << " " << getStatusText(response.status) << "\r\n";
+        oss << "Content-Type: " << response.content_type << "\r\n";
+        oss << "Content-Length: " << response.body.length() << "\r\n";
+        oss << "\r\n";
+        oss << response.body;
+        return oss.str();
+    }
+
+    std::string buildHandlerResponse(const HttpResponse& response) {
+        if (response.content_type.find("application/json") != std::string::npos) {
+            return buildJsonResponse(response.body, response.status);
+        }
+        return buildTextResponse(response);
+    }
+
+    bool isProtectedPath(const std::string& path, const std::string& method) const {
+        if (path == "/metrics" || path == "/api" || path.rfind("/api/", 0) == 0) {
+            return true;
+        }
+        return !isReadOnlyMethod(method);
+    }
+
+    bool isAuthorized(
+        const std::string& path,
+        const std::string& method,
+        const std::string& handler_path,
+        const std::map<std::string, std::string>& headers
+    ) const {
+        if (allow_public_readonly_ && isReadOnlyMethod(method) && isPublicReadEndpoint(handler_path)) {
+            return true;
+        }
+
+        if (auth_token_.empty()) {
+            return true;
+        }
+
+        auto token_it = headers.find("x-admin-token");
+        if (token_it != headers.end() && token_it->second == auth_token_) {
+            return true;
+        }
+
+        auto auth_it = headers.find("authorization");
+        if (auth_it != headers.end()) {
+            const std::string bearer_prefix = "bearer ";
+            std::string normalized_auth = toLower(auth_it->second);
+            if (normalized_auth.rfind(bearer_prefix, 0) == 0) {
+                std::string bearer_token = trim(auth_it->second.substr(bearer_prefix.length()));
+                if (bearer_token == auth_token_) {
+                    return true;
+                }
+            } else if (auth_it->second == auth_token_) {
+                return true;
+            }
+        }
+
+        return getQueryValue(path, "token") == auth_token_;
+    }
+
+    bool isPublicReadEndpoint(const std::string& path) const {
+        return path == "/metrics" ||
+            path == "/api/auth" ||
+            path == "/api/stats" ||
+            path == "/api/plugins" ||
+            path == "/api/personalities" ||
+            path == "/api/groups" ||
+            path == "/api/metrics" ||
+            path == "/api/permissions" ||
+            path == "/api/traces" ||
+            path == "/api/cache" ||
+            path == "/api/sandbox";
+    }
+
+    static bool isReadOnlyMethod(const std::string& method) {
+        return method == "GET" || method == "HEAD" || method == "OPTIONS";
+    }
+
+    static bool isLoopbackHost(const std::string& host) {
+        return host == "127.0.0.1" || host == "localhost" || host == "::1";
+    }
+
+    static std::string stripQueryString(const std::string& path) {
+        size_t query_pos = path.find('?');
+        if (query_pos == std::string::npos) {
+            return path;
+        }
+        return path.substr(0, query_pos);
+    }
+
+    static std::string getQueryValue(const std::string& path, const std::string& key) {
+        size_t query_pos = path.find('?');
+        if (query_pos == std::string::npos || query_pos + 1 >= path.length()) {
+            return "";
+        }
+
+        std::stringstream query_stream(path.substr(query_pos + 1));
+        std::string pair;
+        while (std::getline(query_stream, pair, '&')) {
+            size_t equal_pos = pair.find('=');
+            if (equal_pos == std::string::npos) {
+                continue;
+            }
+
+            std::string current_key = urlDecode(pair.substr(0, equal_pos));
+            if (current_key != key) {
+                continue;
+            }
+
+            return urlDecode(pair.substr(equal_pos + 1));
+        }
+
+        return "";
+    }
+
+    static std::string trim(const std::string& value) {
+        size_t start = value.find_first_not_of(" \t\r\n");
+        if (start == std::string::npos) {
+            return "";
+        }
+        size_t end = value.find_last_not_of(" \t\r\n");
+        return value.substr(start, end - start + 1);
+    }
+
+    static std::string toLower(const std::string& value) {
+        std::string result = value;
+        for (char& ch : result) {
+            ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        }
+        return result;
+    }
+
+    static std::string urlDecode(const std::string& value) {
+        std::string decoded;
+        decoded.reserve(value.size());
+
+        for (size_t index = 0; index < value.size(); ++index) {
+            if (value[index] == '%' && index + 2 < value.size()) {
+                std::string hex = value.substr(index + 1, 2);
+                char decoded_char = static_cast<char>(std::strtol(hex.c_str(), nullptr, 16));
+                decoded += decoded_char;
+                index += 2;
+                continue;
+            }
+
+            if (value[index] == '+') {
+                decoded += ' ';
+                continue;
+            }
+
+            decoded += value[index];
+        }
+
+        return decoded;
+    }
+
+    static std::string getStatusText(int status) {
+        switch (status) {
+            case 200: return "OK";
+            case 401: return "Unauthorized";
+            case 405: return "Method Not Allowed";
+            case 404: return "Not Found";
+            default: return "Error";
+        }
+    }
     
     std::string getAdminPage();
     
     std::atomic<bool> running_{false};
+    std::string bind_host_ = "127.0.0.1";
     int port_ = 8080;
+    std::string auth_token_;
+    bool allow_public_readonly_ = false;
     std::thread server_thread_;
     std::mutex mutex_;
     std::map<std::string, RequestHandler> handlers_;

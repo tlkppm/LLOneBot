@@ -167,7 +167,11 @@ private:
         if (is_float) {
             return JsonValue(std::stod(num_str));
         } else {
-            return JsonValue(std::stoll(num_str));
+            try {
+                return JsonValue(std::stoll(num_str));
+            } catch (const std::out_of_range&) {
+                return JsonValue(num_str);
+            }
         }
     }
     

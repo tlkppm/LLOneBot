@@ -48,7 +48,10 @@ struct BotConfig {
     AIConfig ai;
     std::string data_dir = "data";
     std::string config_file = "config.ini";
+    std::string admin_host = "127.0.0.1";
     int admin_port = 8080;
+    std::string admin_token;
+    bool admin_public_readonly = false;
     std::vector<int64_t> master_qq;
 };
 
@@ -113,6 +116,14 @@ public:
         file << "python_home=" << config_.plugin.python_home << "\n";
         file << "enable_python=" << (config_.plugin.enable_python ? "true" : "false") << "\n";
         file << "enable_native=" << (config_.plugin.enable_native ? "true" : "false") << "\n";
+        if (!config_.plugin.disabled_plugins.empty()) {
+            file << "disabled_plugins=";
+            for (size_t i = 0; i < config_.plugin.disabled_plugins.size(); ++i) {
+                if (i > 0) file << ",";
+                file << config_.plugin.disabled_plugins[i];
+            }
+            file << "\n";
+        }
         file << "\n";
         
         file << "[log]\n";
@@ -123,10 +134,20 @@ public:
         file << "max_file_size=" << config_.log.max_file_size << "\n";
         file << "max_files=" << config_.log.max_files << "\n";
         file << "\n";
+
+        file << "[ai]\n";
+        file << "api_url=" << config_.ai.api_url << "\n";
+        file << "api_key=" << config_.ai.api_key << "\n";
+        file << "\n";
         
         file << "[general]\n";
         file << "data_dir=" << config_.data_dir << "\n";
+        file << "admin_host=" << config_.admin_host << "\n";
         file << "admin_port=" << config_.admin_port << "\n";
+        if (!config_.admin_token.empty()) {
+            file << "admin_token=" << config_.admin_token << "\n";
+        }
+        file << "admin_public_readonly=" << (config_.admin_public_readonly ? "true" : "false") << "\n";
         if (!config_.master_qq.empty()) {
             file << "master_qq=";
             for (size_t i = 0; i < config_.master_qq.size(); ++i) {
@@ -168,6 +189,7 @@ private:
             else if (key == "python_home") config_.plugin.python_home = value;
             else if (key == "enable_python") config_.plugin.enable_python = (value == "true" || value == "1");
             else if (key == "enable_native") config_.plugin.enable_native = (value == "true" || value == "1");
+            else if (key == "disabled_plugins") config_.plugin.disabled_plugins = parseStringList(value);
         }
         else if (section == "log") {
             if (key == "log_dir") config_.log.log_dir = value;
@@ -179,7 +201,10 @@ private:
         }
         else if (section == "general") {
             if (key == "data_dir") config_.data_dir = value;
+            else if (key == "admin_host") config_.admin_host = value;
             else if (key == "admin_port") config_.admin_port = std::stoi(value);
+            else if (key == "admin_token") config_.admin_token = value;
+            else if (key == "admin_public_readonly") config_.admin_public_readonly = (value == "true" || value == "1");
             else if (key == "master_qq") {
                 config_.master_qq.clear();
                 std::stringstream ss(value);
@@ -203,6 +228,19 @@ private:
         if (start == std::string::npos) return "";
         auto end = s.find_last_not_of(" \t\r\n");
         return s.substr(start, end - start + 1);
+    }
+
+    std::vector<std::string> parseStringList(const std::string& value) {
+        std::vector<std::string> result;
+        std::stringstream ss(value);
+        std::string token;
+        while (std::getline(ss, token, ',')) {
+            token = trim(token);
+            if (!token.empty()) {
+                result.push_back(token);
+            }
+        }
+        return result;
     }
     
     BotConfig config_;

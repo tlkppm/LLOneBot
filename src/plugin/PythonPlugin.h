@@ -5,6 +5,7 @@
 #include "../core/Config.h"
 #include "../core/GroupMemberCache.h"
 #include "../api/OneBotApi.h"
+#include "../core/ErrorCodes.h"
 #include <string>
 #include <vector>
 #include <fstream>
@@ -30,6 +31,7 @@ struct PythonTask {
     std::string event_json;
     std::function<void(const std::string&, int64_t)> send_group_callback;
     std::function<void(const std::string&, int64_t)> send_private_callback;
+    std::function<void(int64_t, const std::string&, const std::string&)> upload_file_callback;
 };
 
 class OneBotApi;
@@ -475,12 +477,13 @@ public:
     PythonPlugin(const std::string& script_path) : script_path_(script_path) {
         std::filesystem::path p(script_path);
         info_.name = p.stem().string();
-        info_.version = "1.0.0";
+        info_.version = FRAMEWORK_VERSION;
         info_.author = "Python";
         info_.description = "Python plugin: " + info_.name;
     }
     
     PluginInfo getInfo() const override { return info_; }
+    const std::string& getScriptPath() const { return script_path_; }
     
     bool onLoad(PluginContext* context) override {
         context_ = context;
@@ -519,7 +522,7 @@ public:
             "class LCHBotPlugin:\n"
             "    def __init__(self):\n"
             "        self.name = '" + info_.name + "'\n"
-            "        self.version = '1.0.0'\n"
+            "        self.version = '" FRAMEWORK_VERSION "'\n"
             "        self.author = 'Python'\n"
             "        self.description = ''\n"
             "        self.priority = 50\n"
@@ -546,6 +549,14 @@ public:
             "        self._persist_message('send_group_msg', group_id, message)\n"
             "    def send_private_msg(self, user_id, message):\n"
             "        self._persist_message('send_private_msg', user_id, message)\n"
+            "    def send_group_file(self, group_id, file_path, file_name):\n"
+            "        _lchbot_reply_queue.append({\n"
+            "            'action': 'upload_group_file',\n"
+            "            'group_id': int(group_id),\n"
+            "            'file_path': str(file_path),\n"
+            "            'file_name': str(file_name),\n"
+            "            'message': ''\n"
+            "        })\n"
             "    def _persist_message(self, action, target_id, message):\n"
             "        import json, os, time, threading\n"
             "        queue_file = 'data/py_msg_queue.jsonl'\n"
@@ -600,7 +611,7 @@ public:
             "if '" + info_.name + "' in _lchbot_plugins:\n"
             "    _p = _lchbot_plugins['" + info_.name + "']\n"
             "    _lchbot_tmp_name = str(getattr(_p, 'name', ''))\n"
-            "    _lchbot_tmp_version = str(getattr(_p, 'version', '1.0.0'))\n"
+            "    _lchbot_tmp_version = str(getattr(_p, 'version', '" FRAMEWORK_VERSION "'))\n"
             "    _lchbot_tmp_author = str(getattr(_p, 'author', 'Unknown'))\n"
             "    _lchbot_tmp_desc = str(getattr(_p, 'description', ''))\n"
             "    _lchbot_tmp_icon = str(getattr(_p, 'icon', ''))\n";
@@ -666,6 +677,9 @@ public:
                 };
                 task.send_private_callback = [api](const std::string& msg, int64_t uid) {
                     api->sendPrivateMsg(uid, msg);
+                };
+                task.upload_file_callback = [api](int64_t gid, const std::string& file, const std::string& name) {
+                    api->uploadGroupFile(gid, file, name);
                 };
                 PythonTaskQueue::instance().submitTask(std::move(task));
             }
@@ -813,8 +827,8 @@ private:
                         auto& obj = item.asObject();
                         std::string action = obj.count("action") ? obj.at("action").asString() : "";
                         info.is_group = (action == "send_group_msg");
-                        info.target_id = obj.count("group_id") ? obj.at("group_id").asInt() : 
-                                       (obj.count("user_id") ? obj.at("user_id").asInt() : 0);
+                        info.target_id = obj.count("group_id") ? obj.at("group_id").toInt64() : 
+                                       (obj.count("user_id") ? obj.at("user_id").toInt64() : 0);
                         info.message = obj.count("message") ? obj.at("message").asString() : "";
                         if (info.target_id > 0 && !info.message.empty()) {
                             replies.push_back(info);
@@ -913,11 +927,18 @@ inline void PythonPipelineScheduler::workerLoop(int worker_id) {
                             if (item.isObject()) {
                                 auto& obj = item.asObject();
                                 std::string action = obj.count("action") ? obj.at("action").asString() : "";
-                                int64_t target_id = obj.count("group_id") ? obj.at("group_id").asInt() : 
-                                                  (obj.count("user_id") ? obj.at("user_id").asInt() : 0);
+                                int64_t target_id = obj.count("group_id") ? obj.at("group_id").toInt64() : 
+                                                  (obj.count("user_id") ? obj.at("user_id").toInt64() : 0);
                                 std::string message = obj.count("message") ? obj.at("message").asString() : "";
                                 LOG_INFO("[PythonPipeline] Processing: action=" + action + ", target=" + std::to_string(target_id));
-                                if (target_id > 0 && !message.empty()) {
+                                if (action == "upload_group_file" && target_id > 0) {
+                                    std::string file_path = obj.count("file_path") ? obj.at("file_path").asString() : "";
+                                    std::string file_name = obj.count("file_name") ? obj.at("file_name").asString() : "";
+                                    if (!file_path.empty() && !file_name.empty() && task.upload_file_callback) {
+                                        LOG_INFO("[PythonPipeline] Uploading file: " + file_name + " to group " + std::to_string(target_id));
+                                        task.upload_file_callback(target_id, file_path, file_name);
+                                    }
+                                } else if (target_id > 0 && !message.empty()) {
                                     PipelineResult result;
                                     result.action = action;
                                     result.message = message;

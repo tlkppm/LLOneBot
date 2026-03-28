@@ -134,8 +134,10 @@
        <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /E /I /Y "$(ProjectDir)config" "$(OutDir)config"
-xcopy /E /I /Y "$(ProjectDir)admin" "$(OutDir)admin"</Command>
+      <Command>if exist "$(OutDir)config\personalities.json" del /F /Q "$(OutDir)config\personalities.json"
+xcopy /E /I /Y "$(ProjectDir)config" "$(OutDir)config"
+xcopy /E /I /Y "$(ProjectDir)admin" "$(OutDir)admin"
+xcopy /E /I /Y "$(ProjectDir)plugins" "$(OutDir)plugins"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
 

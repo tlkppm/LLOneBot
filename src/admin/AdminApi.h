@@ -2,10 +2,13 @@
 
 #include <string>
 #include <sstream>
+#include <map>
+#include <vector>
 #include "AdminServer.h"
 #include "Statistics.h"
 #include "../plugin/PluginManager.h"
 #include "../ai/PersonalitySystem.h"
+#include "../core/Config.h"
 #include "../core/Logger.h"
 #include "../core/PermissionSystem.h"
 #include "../core/RateLimiter.h"
@@ -18,6 +21,8 @@ namespace LCHBOT {
 
 class AdminApi {
 public:
+    using HttpResponse = AdminServer::HttpResponse;
+
     static AdminApi& instance() {
         static AdminApi inst;
         return inst;
@@ -28,6 +33,10 @@ public:
         
         server.registerHandler("/api/stats", [this](const std::string& method, const std::string& path, const std::string& body) {
             return handleStats(method, path, body);
+        });
+
+        server.registerHandler("/api/auth", [this](const std::string& method, const std::string& path, const std::string& body) {
+            return handleAuth(method, path, body);
         });
         
         server.registerHandler("/api/plugins", [this](const std::string& method, const std::string& path, const std::string& body) {
@@ -67,7 +76,10 @@ public:
         });
         
         server.registerHandler("/metrics", [this](const std::string& method, const std::string& path, const std::string& body) {
-            return MetricsExporter::instance().exportPrometheus();
+            if (!isReadMethod(method)) {
+                return methodNotAllowed();
+            }
+            return plainTextResponse(MetricsExporter::instance().exportPrometheus(), "text/plain; version=0.0.4; charset=utf-8");
         });
         
         LOG_INFO("[AdminApi] API handlers registered (with enterprise features)");
@@ -75,8 +87,54 @@ public:
     
 private:
     AdminApi() = default;
+
+    struct PersonaReloadChange {
+        std::string change_type;
+        std::string file;
+        std::string persona_id;
+        std::string name;
+        std::string previous_status;
+        std::string current_status;
+        bool previously_loaded = false;
+        bool currently_loaded = false;
+    };
+
+    struct PersonaReloadDiff {
+        int added_count = 0;
+        int removed_count = 0;
+        int changed_count = 0;
+        int unchanged_count = 0;
+        int previous_loaded_files = 0;
+        int current_loaded_files = 0;
+        std::vector<PersonaReloadChange> changes;
+    };
+
+    HttpResponse handleAuth(const std::string& method, const std::string& path, const std::string& body) {
+        if (!isReadMethod(method)) {
+            return methodNotAllowed();
+        }
+
+        const auto& config = ConfigManager::instance().config();
+        bool token_configured = !config.admin_token.empty();
+        bool public_readonly = config.admin_public_readonly;
+        bool read_requires_token = token_configured && !public_readonly;
+        bool write_requires_token = token_configured;
+
+        std::ostringstream json;
+        json << "{";
+        json << "\"token_configured\":" << (token_configured ? "true" : "false") << ",";
+        json << "\"public_readonly\":" << (public_readonly ? "true" : "false") << ",";
+        json << "\"read_requires_token\":" << (read_requires_token ? "true" : "false") << ",";
+        json << "\"write_requires_token\":" << (write_requires_token ? "true" : "false");
+        json << "}";
+        return jsonResponse(json.str());
+    }
     
-    std::string handleStats(const std::string& method, const std::string& path, const std::string& body) {
+    HttpResponse handleStats(const std::string& method, const std::string& path, const std::string& body) {
+        if (!isReadMethod(method)) {
+            return methodNotAllowed();
+        }
+
         auto& stats = Statistics::instance();
         auto& plugins = PluginManager::instance();
         auto& personalities = PersonalitySystem::instance();
@@ -86,38 +144,51 @@ private:
         json << "\"total_calls\":" << stats.getTotalApiCalls() << ",";
         json << "\"active_groups\":" << stats.getActiveGroupCount() << ",";
         json << "\"total_plugins\":" << plugins.getPluginList().size() << ",";
-        json << "\"total_personalities\":" << personalities.listPersonalities().size();
+        json << "\"total_persona_files\":" << personalities.listPersonalities().size();
         json << "}";
-        return json.str();
+        return jsonResponse(json.str());
     }
     
-    std::string handlePlugins(const std::string& method, const std::string& path, const std::string& body) {
+    HttpResponse handlePlugins(const std::string& method, const std::string& path, const std::string& body) {
         auto& mgr = PluginManager::instance();
         
         if (path.find("/enable") != std::string::npos) {
+            if (method != "POST") {
+                return methodNotAllowed();
+            }
             std::string name = extractPluginName(path);
-            if (!name.empty() && method == "POST") {
+            if (!name.empty()) {
                 mgr.enablePlugin(name);
                 LOG_INFO("[Admin] Plugin enabled: " + name);
-                return "{\"success\":true}";
+                return jsonResponse("{\"success\":true}");
             }
+            return notFound();
         }
         
         if (path.find("/disable") != std::string::npos) {
+            if (method != "POST") {
+                return methodNotAllowed();
+            }
             std::string name = extractPluginName(path);
-            if (!name.empty() && method == "POST") {
+            if (!name.empty()) {
                 mgr.disablePlugin(name);
                 LOG_INFO("[Admin] Plugin disabled: " + name);
-                return "{\"success\":true}";
+                return jsonResponse("{\"success\":true}");
             }
+            return notFound();
         }
         
         if (path.find("/reload") != std::string::npos) {
-            if (method == "POST") {
-                mgr.reloadPythonPlugins();
-                LOG_INFO("[Admin] Plugins reloaded");
-                return "{\"success\":true,\"message\":\"Plugins reloaded\"}";
+            if (method != "POST") {
+                return methodNotAllowed();
             }
+            mgr.reloadPythonPlugins();
+            LOG_INFO("[Admin] Plugins reloaded");
+            return jsonResponse("{\"success\":true,\"message\":\"Plugins reloaded\"}");
+        }
+
+        if (!isReadMethod(method)) {
+            return methodNotAllowed();
         }
         
         auto list = mgr.getPluginList();
@@ -137,29 +208,72 @@ private:
             json << "}";
         }
         json << "]}";
-        return json.str();
+        return jsonResponse(json.str());
     }
     
-    std::string handlePersonalities(const std::string& method, const std::string& path, const std::string& body) {
+    HttpResponse handlePersonalities(const std::string& method, const std::string& path, const std::string& body) {
+        if (!isReadMethod(method)) {
+            return methodNotAllowed();
+        }
+
         auto& ps = PersonalitySystem::instance();
-        auto list = ps.listPersonalities();
+        auto report = ps.getPersonaLoadReport();
         
         std::ostringstream json;
-        json << "{\"personalities\":[";
+        json << "{";
+        json << "\"persona_directory\":\"" << escapeJson(report.directory.empty() ? ps.getPersonaDirectoryPath() : report.directory) << "\",";
+        json << "\"persona_pattern\":\"" << escapeJson(ps.getPersonaFilePattern()) << "\",";
+        json << "\"validation\":{";
+        json << "\"discovered_files\":" << report.discovered_files << ",";
+        json << "\"loaded_files\":" << report.loaded_files << ",";
+        json << "\"errors\":" << report.error_count << ",";
+        json << "\"warnings\":" << report.warning_count;
+        json << "},";
+        json << "\"persona_files\":[";
         bool first = true;
-        for (const auto& [id, name] : list) {
+        for (const auto& file : report.files) {
             if (!first) json << ",";
             first = false;
             json << "{";
-            json << "\"id\":\"" << escapeJson(id) << "\",";
-            json << "\"name\":\"" << escapeJson(name) << "\"";
+            std::string status = "ok";
+            if (file.error_count > 0) {
+                status = "error";
+            } else if (file.warning_count > 0) {
+                status = "warning";
+            }
+            json << "\"id\":\"" << escapeJson(file.persona_id) << "\",";
+            json << "\"name\":\"" << escapeJson(file.name) << "\",";
+            json << "\"file\":\"" << escapeJson(file.relative_path) << "\",";
+            json << "\"loaded\":" << (file.loaded ? "true" : "false") << ",";
+            json << "\"status\":\"" << status << "\",";
+            json << "\"errors\":" << file.error_count << ",";
+            json << "\"warnings\":" << file.warning_count;
+            json << "}";
+        }
+        json << "],";
+        json << "\"issues\":[";
+        first = true;
+        for (const auto& issue : report.issues) {
+            if (!first) json << ",";
+            first = false;
+            json << "{";
+            json << "\"file\":\"" << escapeJson(issue.relative_path) << "\",";
+            json << "\"file_name\":\"" << escapeJson(issue.file_name) << "\",";
+            json << "\"persona_id\":\"" << escapeJson(issue.persona_id) << "\",";
+            json << "\"severity\":\"" << escapeJson(issue.severity) << "\",";
+            json << "\"code\":\"" << escapeJson(issue.code) << "\",";
+            json << "\"message\":\"" << escapeJson(issue.message) << "\"";
             json << "}";
         }
         json << "]}";
-        return json.str();
+        return jsonResponse(json.str());
     }
     
-    std::string handleGroups(const std::string& method, const std::string& path, const std::string& body) {
+    HttpResponse handleGroups(const std::string& method, const std::string& path, const std::string& body) {
+        if (!isReadMethod(method)) {
+            return methodNotAllowed();
+        }
+
         auto& stats = Statistics::instance();
         auto& ps = PersonalitySystem::instance();
         auto group_stats = stats.getGroupStats();
@@ -178,21 +292,55 @@ private:
             json << "}";
         }
         json << "]}";
-        return json.str();
+        return jsonResponse(json.str());
     }
     
-    std::string handleReload(const std::string& method, const std::string& path, const std::string& body) {
-        if (method == "POST") {
-            auto& mgr = PluginManager::instance();
-            mgr.reloadPythonPlugins();
-            
-            auto& ps = PersonalitySystem::instance();
-            ps.reload();
-            
-            LOG_INFO("[Admin] System reloaded");
-            return "{\"success\":true,\"message\":\"System reloaded\"}";
+    HttpResponse handleReload(const std::string& method, const std::string& path, const std::string& body) {
+        if (method != "POST") {
+            return methodNotAllowed();
         }
-        return "{\"error\":\"Method not allowed\"}";
+
+        auto& mgr = PluginManager::instance();
+        mgr.reloadPythonPlugins();
+        
+        auto& ps = PersonalitySystem::instance();
+        auto previous_report = ps.getPersonaLoadReport();
+        ps.reload();
+        auto current_report = ps.getPersonaLoadReport();
+        auto persona_diff = buildPersonaReloadDiff(previous_report, current_report);
+        
+        LOG_INFO("[Admin] Plugins and persona directory reloaded");
+        std::ostringstream json;
+        json << "{";
+        json << "\"success\":true,";
+        json << "\"message\":\"Plugins and persona directory reloaded\",";
+        json << "\"persona_diff\":{";
+        json << "\"added\":" << persona_diff.added_count << ",";
+        json << "\"removed\":" << persona_diff.removed_count << ",";
+        json << "\"changed\":" << persona_diff.changed_count << ",";
+        json << "\"unchanged\":" << persona_diff.unchanged_count << ",";
+        json << "\"previous_loaded_files\":" << persona_diff.previous_loaded_files << ",";
+        json << "\"current_loaded_files\":" << persona_diff.current_loaded_files << ",";
+        json << "\"has_changes\":" << (!persona_diff.changes.empty() ? "true" : "false") << ",";
+        json << "\"changes\":[";
+        bool first = true;
+        for (const auto& change : persona_diff.changes) {
+            if (!first) json << ",";
+            first = false;
+            json << "{";
+            json << "\"change_type\":\"" << escapeJson(change.change_type) << "\",";
+            json << "\"file\":\"" << escapeJson(change.file) << "\",";
+            json << "\"persona_id\":\"" << escapeJson(change.persona_id) << "\",";
+            json << "\"name\":\"" << escapeJson(change.name) << "\",";
+            json << "\"previous_status\":\"" << escapeJson(change.previous_status) << "\",";
+            json << "\"current_status\":\"" << escapeJson(change.current_status) << "\",";
+            json << "\"previously_loaded\":" << (change.previously_loaded ? "true" : "false") << ",";
+            json << "\"currently_loaded\":" << (change.currently_loaded ? "true" : "false");
+            json << "}";
+        }
+        json << "]";
+        json << "}}";
+        return jsonResponse(json.str());
     }
     
     std::string extractPluginName(const std::string& path) {
@@ -220,8 +368,115 @@ private:
         }
         return result;
     }
+
+    PersonaReloadDiff buildPersonaReloadDiff(const PersonaLoadReport& previous, const PersonaLoadReport& current) const {
+        PersonaReloadDiff diff;
+        diff.previous_loaded_files = previous.loaded_files;
+        diff.current_loaded_files = current.loaded_files;
+
+        std::map<std::string, PersonaFileReport> previous_files;
+        std::map<std::string, PersonaFileReport> current_files;
+
+        for (const auto& file : previous.files) {
+            previous_files[buildPersonaFileKey(file)] = file;
+        }
+        for (const auto& file : current.files) {
+            current_files[buildPersonaFileKey(file)] = file;
+        }
+
+        for (const auto& [key, current_file] : current_files) {
+            auto previous_it = previous_files.find(key);
+            if (previous_it == previous_files.end()) {
+                diff.added_count++;
+                diff.changes.push_back({
+                    "added",
+                    current_file.relative_path,
+                    current_file.persona_id,
+                    current_file.name,
+                    "",
+                    getPersonaFileStatus(current_file),
+                    false,
+                    current_file.loaded
+                });
+                continue;
+            }
+
+            if (hasPersonaFileChanged(previous_it->second, current_file)) {
+                diff.changed_count++;
+                diff.changes.push_back({
+                    "changed",
+                    current_file.relative_path,
+                    current_file.persona_id,
+                    current_file.name,
+                    getPersonaFileStatus(previous_it->second),
+                    getPersonaFileStatus(current_file),
+                    previous_it->second.loaded,
+                    current_file.loaded
+                });
+                continue;
+            }
+
+            diff.unchanged_count++;
+        }
+
+        for (const auto& [key, previous_file] : previous_files) {
+            if (current_files.find(key) != current_files.end()) {
+                continue;
+            }
+
+            diff.removed_count++;
+            diff.changes.push_back({
+                "removed",
+                previous_file.relative_path,
+                previous_file.persona_id,
+                previous_file.name,
+                getPersonaFileStatus(previous_file),
+                "",
+                previous_file.loaded,
+                false
+            });
+        }
+
+        return diff;
+    }
+
+    std::string buildPersonaFileKey(const PersonaFileReport& file) const {
+        if (!file.relative_path.empty()) {
+            return file.relative_path;
+        }
+        if (!file.file_name.empty()) {
+            return file.file_name;
+        }
+        if (!file.persona_id.empty()) {
+            return file.persona_id;
+        }
+        return file.name;
+    }
+
+    std::string getPersonaFileStatus(const PersonaFileReport& file) const {
+        if (file.error_count > 0) {
+            return "error";
+        }
+        if (file.warning_count > 0) {
+            return "warning";
+        }
+        return "ok";
+    }
+
+    bool hasPersonaFileChanged(const PersonaFileReport& previous, const PersonaFileReport& current) const {
+        return previous.persona_id != current.persona_id ||
+            previous.name != current.name ||
+            previous.loaded != current.loaded ||
+            previous.error_count != current.error_count ||
+            previous.warning_count != current.warning_count ||
+            previous.content_signature != current.content_signature;
+    }
     
-    std::string handleMetrics(const std::string& method, const std::string& path, const std::string& body) {
+    HttpResponse handleMetrics(const std::string& method, const std::string& path, const std::string& body) {
+        if (!isReadMethod(method)) {
+            return methodNotAllowed();
+        }
+
         auto& metrics = MetricsExporter::instance();
         auto& cache = ResponseCache::instance();
         auto& trace = TraceSystem::instance();
@@ -244,14 +499,21 @@ private:
         json << "\"errors\":" << trace_stats.errors;
         json << "}";
         json << "}";
-        return json.str();
+        return jsonResponse(json.str());
     }
     
-    std::string handlePermissions(const std::string& method, const std::string& path, const std::string& body) {
+    HttpResponse handlePermissions(const std::string& method, const std::string& path, const std::string& body) {
         auto& perms = PermissionSystem::instance();
         
-        if (method == "POST" && path.find("/add") != std::string::npos) {
-            return "{\"error\":\"Not implemented\"}";
+        if (path.find("/add") != std::string::npos) {
+            if (method != "POST") {
+                return methodNotAllowed();
+            }
+            return jsonResponse("{\"error\":\"Not implemented\"}", 501);
+        }
+
+        if (!isReadMethod(method)) {
+            return methodNotAllowed();
         }
         
         std::ostringstream json;
@@ -273,14 +535,18 @@ private:
         json << "],";
         json << "\"stats\":\"" << escapeJson(perms.exportStats()) << "\"";
         json << "}";
-        return json.str();
+        return jsonResponse(json.str());
     }
     
-    std::string handleTraces(const std::string& method, const std::string& path, const std::string& body) {
+    HttpResponse handleTraces(const std::string& method, const std::string& path, const std::string& body) {
+        if (!isReadMethod(method)) {
+            return methodNotAllowed();
+        }
+
         auto& trace = TraceSystem::instance();
         
         if (path.find("/jaeger") != std::string::npos) {
-            return trace.exportJaegerFormat();
+            return jsonResponse(trace.exportJaegerFormat());
         }
         
         auto spans = trace.getRecentSpans(50);
@@ -291,15 +557,22 @@ private:
             json << trace.formatSpanJson(spans[i]);
         }
         json << "]}";
-        return json.str();
+        return jsonResponse(json.str());
     }
     
-    std::string handleCache(const std::string& method, const std::string& path, const std::string& body) {
+    HttpResponse handleCache(const std::string& method, const std::string& path, const std::string& body) {
         auto& cache = ResponseCache::instance();
         
-        if (method == "POST" && path.find("/clear") != std::string::npos) {
+        if (path.find("/clear") != std::string::npos) {
+            if (method != "POST") {
+                return methodNotAllowed();
+            }
             cache.clear();
-            return "{\"success\":true,\"message\":\"Cache cleared\"}";
+            return jsonResponse("{\"success\":true,\"message\":\"Cache cleared\"}");
+        }
+
+        if (!isReadMethod(method)) {
+            return methodNotAllowed();
         }
         
         auto stats = cache.getStats();
@@ -312,10 +585,14 @@ private:
         json << "\"size_bytes\":" << stats.total_bytes << ",";
         json << "\"entries\":" << stats.entry_count;
         json << "}";
-        return json.str();
+        return jsonResponse(json.str());
     }
     
-    std::string handleSandbox(const std::string& method, const std::string& path, const std::string& body) {
+    HttpResponse handleSandbox(const std::string& method, const std::string& path, const std::string& body) {
+        if (!isReadMethod(method)) {
+            return methodNotAllowed();
+        }
+
         auto& sandbox = PluginSandbox::instance();
         auto stats = sandbox.getAllStats();
         
@@ -332,7 +609,27 @@ private:
             json << "}";
         }
         json << "]}";
-        return json.str();
+        return jsonResponse(json.str());
+    }
+
+    HttpResponse jsonResponse(const std::string& body, int status = 200) const {
+        return HttpResponse{status, "application/json; charset=utf-8", body};
+    }
+
+    HttpResponse plainTextResponse(const std::string& body, const std::string& content_type) const {
+        return HttpResponse{200, content_type, body};
+    }
+
+    HttpResponse methodNotAllowed() const {
+        return jsonResponse("{\"error\":\"Method not allowed\"}", 405);
+    }
+
+    HttpResponse notFound() const {
+        return jsonResponse("{\"error\":\"Not found\"}", 404);
+    }
+
+    bool isReadMethod(const std::string& method) const {
+        return method == "GET" || method == "HEAD";
     }
 };
 

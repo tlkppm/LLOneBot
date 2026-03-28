@@ -48,6 +48,10 @@ struct GroupPermissionData {
     int64_t group_id = 0;
     bool ai_enabled = true;
     bool commands_enabled = true;
+    bool auto_chat_enabled = false;
+    int auto_chat_cooldown = 300;
+    int auto_chat_min_messages = 15;
+    double auto_chat_probability = 0.25;
     std::set<std::string> allowed_commands;
     std::set<std::string> denied_commands;
     int daily_limit = 1000;
@@ -270,6 +274,31 @@ public:
         saveToFile();
     }
     
+    void setAutoChat(int64_t group_id, bool enabled) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto& gp = group_permissions_[group_id];
+        gp.group_id = group_id;
+        gp.auto_chat_enabled = enabled;
+        saveToFile();
+    }
+    
+    void setAutoChatParams(int64_t group_id, int cooldown, int min_msgs, double prob) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto& gp = group_permissions_[group_id];
+        gp.group_id = group_id;
+        if (cooldown > 0) gp.auto_chat_cooldown = cooldown;
+        if (min_msgs > 0) gp.auto_chat_min_messages = min_msgs;
+        if (prob > 0 && prob <= 1.0) gp.auto_chat_probability = prob;
+        saveToFile();
+    }
+    
+    bool isAutoChatEnabled(int64_t group_id) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = group_permissions_.find(group_id);
+        if (it != group_permissions_.end()) return it->second.auto_chat_enabled;
+        return false;
+    }
+    
     void setGroupMinLevel(int64_t group_id, Permission min_command, Permission min_ai) {
         std::lock_guard<std::mutex> lock(mutex_);
         auto& gp = group_permissions_[group_id];
@@ -447,6 +476,9 @@ private:
             file << "    \"" << id << "\": {"
                  << "\"ai_enabled\": " << (gp.ai_enabled ? "true" : "false")
                  << ", \"commands_enabled\": " << (gp.commands_enabled ? "true" : "false")
+                 << ", \"auto_chat_enabled\": " << (gp.auto_chat_enabled ? "true" : "false")
+                 << ", \"auto_chat_cooldown\": " << gp.auto_chat_cooldown
+                 << ", \"auto_chat_min_messages\": " << gp.auto_chat_min_messages
                  << ", \"daily_limit\": " << gp.daily_limit
                  << "}";
             first = false;

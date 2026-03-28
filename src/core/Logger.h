@@ -59,8 +59,36 @@ public:
             openLogFile();
         }
         
+        start_time_ = std::chrono::steady_clock::now();
         running_ = true;
         worker_ = std::thread(&Logger::processLogs, this);
+    }
+    
+    void setModuleLevel(const std::string& module, LogLevel level) {
+        std::lock_guard<std::mutex> lock(module_mutex_);
+        module_levels_[module] = level;
+    }
+    
+    bool shouldLog(LogLevel level, const std::string& module = "") const {
+        if (!module.empty()) {
+            std::lock_guard<std::mutex> lock(module_mutex_);
+            auto it = module_levels_.find(module);
+            if (it != module_levels_.end()) return level >= it->second;
+        }
+        return level >= level_;
+    }
+    
+    std::string getStats() const {
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - start_time_).count();
+        std::ostringstream ss;
+        ss << "Uptime: " << elapsed << "s";
+        ss << " | Total: " << total_logs_.load();
+        ss << " | Errors: " << error_count_.load();
+        ss << " | Warns: " << warn_count_.load();
+        ss << " | Dropped: " << dropped_count_.load();
+        ss << " | QueuePeak: " << peak_queue_size_.load();
+        return ss.str();
     }
     
     void shutdown() {
@@ -82,6 +110,10 @@ public:
     void log(LogLevel level, const char* file, int line, const std::string& fmt, Args&&... args) {
         if (level < level_) return;
         
+        total_logs_++;
+        if (level == LogLevel::Error || level == LogLevel::Fatal) error_count_++;
+        else if (level == LogLevel::Warn) warn_count_++;
+        
         std::string message = format(fmt, std::forward<Args>(args)...);
         
         auto now = std::chrono::system_clock::now();
@@ -89,22 +121,33 @@ public:
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             now.time_since_epoch()) % 1000;
         
-        std::ostringstream oss;
         struct tm time_info;
 #ifdef _WIN32
         localtime_s(&time_info, &time);
 #else
         localtime_r(&time, &time_info);
 #endif
+        
+        std::ostringstream oss;
         oss << std::put_time(&time_info, "%Y-%m-%d %H:%M:%S");
         oss << '.' << std::setfill('0') << std::setw(3) << ms.count();
         oss << " [" << levelToString(level) << "] ";
         oss << "[" << extractFilename(file) << ":" << line << "] ";
         oss << message;
         
-        std::lock_guard<std::mutex> lock(queue_mutex_);
-        log_queue_.push({level, oss.str()});
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex_);
+            if (log_queue_.size() >= max_queue_size_) {
+                dropped_count_++;
+                return;
+            }
+            log_queue_.push({level, oss.str()});
+            size_t qs = log_queue_.size();
+            if (qs > peak_queue_size_.load()) peak_queue_size_.store(qs);
+        }
         cv_.notify_one();
+        
+        current_day_ = time_info.tm_yday;
     }
     
     void trace(const char* file, int line, const std::string& msg) { log(LogLevel::Trace, file, line, msg); }
@@ -189,7 +232,18 @@ private:
             file_ << entry.message << std::endl;
             current_file_size_ += entry.message.size() + 1;
             
-            if (current_file_size_ >= max_file_size_) {
+            auto now = std::chrono::system_clock::now();
+            auto t = std::chrono::system_clock::to_time_t(now);
+            struct tm ti;
+#ifdef _WIN32
+            localtime_s(&ti, &t);
+#else
+            localtime_r(&t, &ti);
+#endif
+            bool day_changed = (last_log_day_ >= 0 && ti.tm_yday != last_log_day_);
+            last_log_day_ = ti.tm_yday;
+            
+            if (current_file_size_ >= max_file_size_ || day_changed) {
                 rotateLogFile();
             }
         }
@@ -307,12 +361,25 @@ private:
     std::ofstream file_;
     std::string current_log_file_;
     size_t current_file_size_ = 0;
+    int last_log_day_ = -1;
+    int current_day_ = -1;
     
     std::queue<LogEntry> log_queue_;
     std::mutex queue_mutex_;
     std::condition_variable cv_;
     std::thread worker_;
     std::atomic<bool> running_{false};
+    
+    std::map<std::string, LogLevel> module_levels_;
+    mutable std::mutex module_mutex_;
+    
+    std::chrono::steady_clock::time_point start_time_;
+    std::atomic<uint64_t> total_logs_{0};
+    std::atomic<uint64_t> error_count_{0};
+    std::atomic<uint64_t> warn_count_{0};
+    std::atomic<uint64_t> dropped_count_{0};
+    std::atomic<size_t> peak_queue_size_{0};
+    static constexpr size_t max_queue_size_ = 100000;
 };
 
 #define LOG_TRACE(msg) LCHBOT::Logger::instance().trace(__FILE__, __LINE__, msg)
@@ -322,5 +389,6 @@ private:
 #define LOG_ERROR(msg) LCHBOT::Logger::instance().error(__FILE__, __LINE__, msg)
 #define LOG_FATAL(msg) LCHBOT::Logger::instance().fatal(__FILE__, __LINE__, msg)
 #define LOG_MSG(msg) LCHBOT::Logger::instance().message(msg)
+#define LOG_STATS() LCHBOT::Logger::instance().getStats()
 
 }

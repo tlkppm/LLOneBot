@@ -44,7 +44,7 @@ public:
         if (callback) {
             ApiResponse response;
             if (obj.find("status") != obj.end()) response.status = obj.at("status").asString();
-            if (obj.find("retcode") != obj.end()) response.retcode = static_cast<int32_t>(obj.at("retcode").asInt());
+            if (obj.find("retcode") != obj.end()) response.retcode = static_cast<int32_t>(obj.at("retcode").toInt64());
             if (obj.find("data") != obj.end()) response.data = obj.at("data");
             response.echo = echo;
             callback(response);
@@ -82,14 +82,14 @@ public:
         return callApi("send_group_msg", JsonValue(params));
     }
     
-    std::string sendGroupMsgReply(int64_t group_id, int32_t reply_msg_id, const std::string& message) {
+    std::string sendGroupMsgReply(int64_t group_id, int64_t reply_msg_id, const std::string& message) {
         std::vector<MessageSegment> segments;
         segments.push_back(reply(reply_msg_id));
         segments.push_back(text(message));
         return sendGroupMsg(group_id, segments);
     }
     
-    std::string sendPrivateMsgReply(int64_t user_id, int32_t reply_msg_id, const std::string& message) {
+    std::string sendPrivateMsgReply(int64_t user_id, int64_t reply_msg_id, const std::string& message) {
         std::vector<MessageSegment> segments;
         segments.push_back(reply(reply_msg_id));
         segments.push_back(text(message));
@@ -109,15 +109,15 @@ public:
         return callApi("send_msg", JsonValue(params));
     }
     
-    std::string deleteMsg(int32_t message_id) {
+    std::string deleteMsg(int64_t message_id) {
         std::map<std::string, JsonValue> params;
-        params["message_id"] = JsonValue(static_cast<int64_t>(message_id));
+        params["message_id"] = JsonValue(message_id);
         return callApi("delete_msg", JsonValue(params));
     }
     
-    std::string getMsg(int32_t message_id) {
+    std::string getMsg(int64_t message_id) {
         std::map<std::string, JsonValue> params;
-        params["message_id"] = JsonValue(static_cast<int64_t>(message_id));
+        params["message_id"] = JsonValue(message_id);
         return callApi("get_msg", JsonValue(params));
     }
     
@@ -194,6 +194,13 @@ public:
         params["special_title"] = JsonValue(title);
         params["duration"] = JsonValue(duration);
         return callApi("set_group_special_title", JsonValue(params));
+    }
+
+    std::string sendGroupNudge(int64_t group_id, int64_t user_id) {
+        std::map<std::string, JsonValue> params;
+        params["group_id"] = JsonValue(group_id);
+        params["user_id"] = JsonValue(user_id);
+        return callApi("send_group_nudge", JsonValue(params));
     }
     
     std::string setFriendAddRequest(const std::string& flag, bool approve = true, const std::string& remark = "") {
@@ -276,6 +283,33 @@ public:
         return callApi("can_send_record", JsonValue(std::map<std::string, JsonValue>{}));
     }
     
+    std::string uploadGroupFile(int64_t group_id, const std::string& file, const std::string& name, const std::string& folder = "") {
+        std::map<std::string, JsonValue> params;
+        params["group_id"] = JsonValue(group_id);
+        params["file"] = JsonValue(file);
+        params["name"] = JsonValue(name);
+        if (!folder.empty()) params["folder"] = JsonValue(folder);
+        return callApi("upload_group_file", JsonValue(params));
+    }
+    
+    std::string sendGroupForwardMsg(int64_t group_id, const std::vector<std::tuple<std::string, int64_t, std::string>>& nodes) {
+        std::vector<JsonValue> msg_arr;
+        for (const auto& [name, uin, content] : nodes) {
+            std::map<std::string, JsonValue> node_data;
+            node_data["name"] = JsonValue(name);
+            node_data["uin"] = JsonValue(std::to_string(uin));
+            node_data["content"] = JsonValue(content);
+            std::map<std::string, JsonValue> node_obj;
+            node_obj["type"] = JsonValue(std::string("node"));
+            node_obj["data"] = JsonValue(node_data);
+            msg_arr.push_back(JsonValue(node_obj));
+        }
+        std::map<std::string, JsonValue> params;
+        params["group_id"] = JsonValue(group_id);
+        params["messages"] = JsonValue(msg_arr);
+        return callApi("send_group_forward_msg", JsonValue(params));
+    }
+    
     void callApiWithCallback(const std::string& action, const JsonValue& params, ResponseCallback callback) {
         std::string echo = callApi(action, params);
         if (callback) {
@@ -326,7 +360,7 @@ public:
         return seg;
     }
     
-    static MessageSegment reply(int32_t id) {
+    static MessageSegment reply(int64_t id) {
         MessageSegment seg;
         seg.type = "reply";
         seg.data["id"] = std::to_string(id);

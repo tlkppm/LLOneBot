@@ -9,9 +9,18 @@
 
 ## 简介 | Introduction
 
-**LCHBOT** 是一个基于 OneBot 11 协议的现代化 QQ 机器人框架，采用纯 C++ 编写核心（零外部依赖），内置 SQLite 数据库、多模型 AI 对话系统和 Python 插件热加载，提供企业级的稳定性和扩展性。
+**LCHBOT** 是一个基于 OneBot 11 协议的现代化 QQ 机器人框架，采用纯 C++ 编写核心（零外部依赖），内置 SQLite 数据库、多模型 AI 对话系统、人格系统、管理面板与 Python 插件热加载，提供企业级的稳定性和扩展性。
 
-**LCHBOT** is a modern QQ bot framework based on the OneBot 11 protocol. Written entirely in C++ (zero external dependencies) with built-in SQLite database, multi-model AI chat system, and Python plugin hot-reload support, it provides enterprise-level stability and extensibility.
+**LCHBOT** is a modern QQ bot framework based on the OneBot 11 protocol. Written entirely in C++ (zero external dependencies) with built-in SQLite database, multi-model AI chat system, persona system, admin panel, and Python plugin hot-reload support, it provides enterprise-level stability and extensibility.
+
+## 近期更新 | Recent Updates
+
+- **人格系统升级** | Persona Upgrade — 已从单一 `config/personalities.json` 迁移为 `config/personalities/*.persona.md`，支持 Markdown 外部人格文件、校验、热重载与差异展示
+- **AI 能力增强** | AI Brain Upgrade — 新增情绪核心、群行为分析、群成员感知、自动工具补偿、戳一戳等群管理动作接入
+- **模型热重载** | Model Hot Reload — `config/models.json` 变更后自动热加载，无需重启机器人
+- **插件生态扩展** | Plugin Expansion — 增加天气卡片、每日新闻、群聊玩法、今日运势、JMComic、E-Hentai 等插件
+- **管理面板增强** | Admin Panel Refresh — 改进权限提示、人格校验摘要、壁纸回退加载、只读/鉴权状态展示
+- **运行稳定性修复** | Stability Fixes — 修复大整数 JSON 解析溢出、Python 插件热重载首次扫描误判、Release 构建与启动期异常定位能力
 
 ## 特性 | Features
 
@@ -23,13 +32,16 @@
 
 ### AI 对话系统 | AI Chat System
 - **多模型支持** | Multi-Model — Gemini / Claude / DeepSeek / Grok 等，可通过 `config/models.json` 自由配置
-- **多人格系统** | Multi-Personality — 每个群可独立配置 AI 人格与提示词
+- **多人格系统** | Multi-Personality — 每个群可独立配置 AI 人格与提示词，基于 `*.persona.md` 文件加载
+- **情绪核心** | Emotional Core — 跟踪群聊关系、情绪倾向与交互上下文
+- **行为分析** | Behavior Analyzer — 统计活跃度、最近发言、群成员行为特征
 - **智能工具调用** | Tool Use — AI 可在对话中自动调用以下工具：
   - `holiday` — 查询节日日期（农历/公历）
   - `keyword` / `sender` / `recent` / `date` — 搜索聊天记录
   - `users` / `summary` — 活跃用户排行与年度总结
   - `setcard` — 修改群成员名片（带群成员校验，防伪造 QQ 号）
   - `settitle` — 设置群成员专属头衔（仅群主可用）
+  - `mute` / `kick` / `nudge` — 群管动作（按权限校验）
 - **群成员感知** | Member Awareness — 自动缓存群成员列表，AI 可精准识别昵称与 QQ 号对应关系
 - **自动补偿机制** | Auto-Compensation — AI 未生成工具调用但文本中表达了操作意图时，自动提取并执行
 - **上下文记忆** | Context Memory — SQLite 持久化存储，智能检索相关历史对话
@@ -55,6 +67,16 @@
 - **Pipeline 调度** | Pipeline Scheduler — 异步任务队列，支持长耗时插件
 - **自动热加载** | Auto Hot-Reload — 5 秒检测，自动清理旧实例
 - **群成员缓存共享** | Member Cache Sharing — Python 插件可访问群成员数据
+
+### 内置插件 | Bundled Plugins
+- `utility_tools.py` — 天气卡片查询
+- `daily_news.py` — 每日新闻图片播报
+- `fortune_card.py` — 今日运势图片卡
+- `group_fun.py` — 群聊娱乐指令
+- `jmcomic_plugin.py` — JMComic 查询与下载
+- `ehentai_plugin.py` — E-Hentai 查询与阅读
+- `touqing.py` — 群聊互动玩法
+- `help.py` — 指令帮助与插件简介
 
 ---
 
@@ -100,7 +122,18 @@ port=8080
 }
 ```
 
-**`config/personalities.json`** — AI 人格配置（每群可独立设置）
+**`config/personalities/`** — AI 人格配置目录（推荐）：
+
+```text
+config/personalities/
+├── none.persona.md
+├── yunmeng.persona.md
+├── xiadie.persona.md
+├── xilian.persona.md
+└── ...
+```
+
+每个 `.persona.md` 文件包含人格 ID、名称、系统提示词、风格约束等内容。`config/personalities.json` 已废弃并移除。
 
 ### 编译 & 运行 | Build & Run
 
@@ -110,6 +143,12 @@ MSBuild.exe LCHBOT.vcxproj /p:Configuration=Release /p:Platform=x64
 
 # 运行
 x64\Release\LCHBOT.exe
+```
+
+或使用 Visual Studio：
+
+```bash
+devenv.com LCHBOT.vcxproj /Build "Release|x64"
 ```
 
 ---
@@ -199,6 +238,13 @@ AI 在 `[THINK]` 块中通过 `[QUERY:type=arg]` 格式调用工具，系统自�
 
 访问 `http://127.0.0.1:8080` 进入 Web 管理面板。
 
+管理面板支持：
+
+- 插件启停与系统重载
+- 群列表、缓存、指标、权限、沙箱状态查看
+- 人格目录、校验摘要与最近热重载差异查看
+- 只读模式 / 管理令牌鉴权状态提示
+
 | 端点 | 方法 | 描述 |
 |------|------|------|
 | `/api/status` | GET | 系统状态 |
@@ -219,6 +265,8 @@ LCHBOT/
 ├── src/
 │   ├── ai/                  # AI 对话系统
 │   │   ├── AIService.h      # AI 服务核心（多模型、工具调用、自动补偿）
+│   │   ├── EmotionalCore.h  # 情绪核心
+│   │   ├── XingsuiKernel.h  # 星穗内核
 │   │   ├── ContextDatabase.h # 上下文数据库（SQLite 持久化）
 │   │   └── PersonalitySystem.h # 多人格管理
 │   ├── api/
@@ -226,6 +274,7 @@ LCHBOT/
 │   ├── bot/
 │   │   └── Bot.h            # 机器人主逻辑 + 群成员缓存
 │   ├── core/
+│   │   ├── BehaviorAnalyzer.h # 群行为分析
 │   │   ├── Database.h       # SQLite 数据库引擎 + 自动迁移
 │   │   ├── GroupMemberCache.h # 群成员缓存（线程安全）
 │   │   ├── Calendar.h       # 节日日历（农历/公历）
@@ -238,7 +287,7 @@ LCHBOT/
 │   └── main.cpp
 ├── config/
 │   ├── models.json          # AI 模型配置
-│   ├── personalities.json   # 人格配置
+│   ├── personalities/       # Markdown 人格配置目录
 │   └── holidays.json        # 节日数据
 ├── plugins/                 # Python 插件目录
 ├── admin/

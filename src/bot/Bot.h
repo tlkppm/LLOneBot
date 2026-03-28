@@ -31,6 +31,7 @@
 #include <atomic>
 #include <thread>
 #include <chrono>
+#include <filesystem>
 #include "../core/GroupMemberCache.h"
 #include "../core/FileMessageQueue.h"
 
@@ -53,10 +54,16 @@ public:
         }
         
         const auto& config = config_mgr.config();
+        base_path_ = resolveBasePath(config_path);
+        config_dir_ = base_path_ / "config";
+        data_dir_ = resolveConfiguredPath(base_path_, config.data_dir);
+        std::filesystem::create_directories(config_dir_);
+        std::filesystem::create_directories(data_dir_);
+        std::filesystem::create_directories(resolveConfiguredPath(base_path_, config.log.log_dir));
         
         auto& logger = Logger::instance();
         logger.init(
-            config.log.log_dir,
+            resolveConfiguredPath(base_path_, config.log.log_dir).string(),
             config.log.log_level,
             config.log.console_output,
             config.log.file_output,
@@ -75,18 +82,18 @@ public:
             }
         }
         
-        ContextDatabase::instance().initialize("data/context.db");
+        ContextDatabase::instance().initialize(resolveDataPath("context.db").string());
         Calendar::instance().initialize();
         PersonalitySystem::instance().initialize();
         
-        PermissionSystem::instance().initialize("config/permissions.json");
+        PermissionSystem::instance().initialize(resolveConfigPath("permissions.json").string());
         RateLimiter::instance().initialize();
-        StructuredLogger::instance().initialize(config.log.log_dir, SLogLevel::INFO);
+        StructuredLogger::instance().initialize(resolveConfiguredPath(base_path_, config.log.log_dir).string(), SLogLevel::INFO);
         MetricsExporter::instance().initialize();
         TraceSystem::instance().initialize(1.0, "lchbot");
         ConfigWatcher::instance().initialize(5000);
         PluginSandbox::instance().initialize();
-        ResponseCache::instance().initialize(100 * 1024 * 1024, 3600, "data/response_cache.dat");
+        ResponseCache::instance().initialize(100 * 1024 * 1024, 3600, resolveDataPath("response_cache.dat").string());
         
         api_ = std::make_unique<OneBotApi>();
         PythonTaskQueue::instance().setApi(api_.get());
@@ -94,12 +101,16 @@ public:
         
         auto& plugin_mgr = PluginManager::instance();
         plugin_mgr.setContext(context_.get());
+        plugin_mgr.setDisabledPlugins(config.plugin.disabled_plugins);
+
+        std::filesystem::path plugin_dir = resolveConfiguredPath(base_path_, config.plugin.plugins_dir);
+        plugin_mgr.setPluginDirectory(plugin_dir.string());
         
         plugin_mgr.registerBuiltinPlugin<AIPlugin>();
         
-        LOG_INFO("Loading plugins from: " + config.plugin.plugins_dir);
+        LOG_INFO("Loading plugins from: " + plugin_dir.string());
         plugin_mgr.loadPluginsFromDirectory(
-            config.plugin.plugins_dir,
+            plugin_dir.string(),
             config.plugin.enable_python,
             config.plugin.enable_native
         );
@@ -116,6 +127,23 @@ public:
             LOG_INFO("Connected to LLBot");
             connected_ = true;
             api_->getLoginInfo();
+            api_->callApiWithCallback("get_group_list", JsonValue(std::map<std::string, JsonValue>{}),
+                [](const ApiResponse& resp) {
+                    if (resp.retcode != 0 || !resp.data.isArray()) return;
+                    int count = 0;
+                    for (const auto& g : resp.data.asArray()) {
+                        if (!g.isObject()) continue;
+                        auto& obj = g.asObject();
+                        int64_t gid = obj.count("group_id") ? obj.at("group_id").toInt64() : 0;
+                        std::string gname = obj.count("group_name") ? obj.at("group_name").asString() : "";
+                        if (gid > 0) {
+                            GroupMemberCache::instance().addGroupId(gid);
+                            if (!gname.empty()) GroupMemberCache::instance().setGroupName(gid, gname);
+                            count++;
+                        }
+                    }
+                    LOG_INFO("[Bot] Fetched " + std::to_string(count) + " groups from get_group_list");
+                });
         });
         
         ws_client_->setDisconnectCallback([this]() {
@@ -139,8 +167,14 @@ public:
                 ws_client_->send(message);
             }
         });
-        
-        AIService::instance().loadModels("config/models.json");
+
+        std::filesystem::path models_path = resolveConfigPath("models.json");
+        AIService::instance().loadModels(models_path.string());
+        ConfigWatcher::instance().watchFile(models_path.string(), [models_path](const std::string&) {
+            AIService::instance().loadModels(models_path.string());
+            LOG_INFO("[AI] models.json hot reloaded");
+        });
+
         if (AIService::instance().getCurrentModel().empty()) {
             AIService::instance().setApiUrl(config.ai.api_url);
         }
@@ -161,8 +195,10 @@ public:
         lchbot::FileMessageQueue::instance().start();
         
         AdminApi::instance().initialize();
-        if (AdminServer::instance().start(config.admin_port > 0 ? config.admin_port : 8080)) {
-            LOG_INFO("[Admin] Management panel: http://127.0.0.1:" + std::to_string(config.admin_port > 0 ? config.admin_port : 8080));
+        const int admin_port = config.admin_port > 0 ? config.admin_port : 8080;
+        const std::string admin_host = config.admin_host.empty() ? "127.0.0.1" : config.admin_host;
+        if (AdminServer::instance().start(admin_host, admin_port, config.admin_token, config.admin_public_readonly)) {
+            LOG_INFO("[Admin] Management panel: http://" + admin_host + ":" + std::to_string(admin_port));
         }
         
         PluginManager::instance().startHotReload(5);
@@ -270,10 +306,11 @@ public:
     
     bool reloadPlugin(const std::string& name) {
         auto& mgr = PluginManager::instance();
-        if (mgr.unloadPlugin(name)) {
-            LOG_INFO("[Plugin] Unloaded: " + name);
+        if (mgr.reloadPlugin(name)) {
+            LOG_INFO("[Plugin] Reloaded: " + name);
+            return true;
         }
-        return true;
+        return false;
     }
     
     void sendGroupMessage(int64_t group_id, const std::string& message) {
@@ -291,6 +328,37 @@ public:
 private:
     Bot() = default;
     ~Bot() { stop(); }
+
+    static std::filesystem::path resolveBasePath(const std::string& config_path) {
+        std::filesystem::path path(config_path);
+        if (path.is_relative()) {
+            path = std::filesystem::current_path() / path;
+        }
+
+        std::filesystem::path base_path = path.has_parent_path() ? path.parent_path() : std::filesystem::current_path();
+        return base_path.lexically_normal();
+    }
+
+    static std::filesystem::path resolveConfiguredPath(const std::filesystem::path& base_path, const std::string& configured_path) {
+        std::filesystem::path path(configured_path);
+        if (path.empty()) {
+            return base_path;
+        }
+
+        if (path.is_relative()) {
+            return (base_path / path).lexically_normal();
+        }
+
+        return path.lexically_normal();
+    }
+
+    std::filesystem::path resolveConfigPath(const std::string& file_name) const {
+        return (config_dir_ / file_name).lexically_normal();
+    }
+
+    std::filesystem::path resolveDataPath(const std::string& file_name) const {
+        return (data_dir_ / file_name).lexically_normal();
+    }
     
     void handleMessage(int client_id, const std::string& message) {
         try {
@@ -357,7 +425,8 @@ private:
             EventDispatcher::instance().dispatch(*event);
             
         } catch (const std::exception& e) {
-            LOG_ERROR("Failed to handle message: " + std::string(e.what()));
+            std::string preview = message.substr(0, 240);
+            LOG_ERROR("Failed to handle message: " + std::string(e.what()) + " | payload=" + preview);
         }
     }
     
@@ -378,25 +447,46 @@ private:
                 for (const auto& member : member_resp.data.asArray()) {
                     if (!member.isObject()) continue;
                     auto& m = member.asObject();
-                    int64_t uid = m.count("user_id") ? m.at("user_id").asInt() : 0;
+                    int64_t uid = m.count("user_id") ? m.at("user_id").toInt64() : 0;
                     std::string nick = "";
                     if (m.count("card") && !m.at("card").asString().empty()) {
                         nick = m.at("card").asString();
                     } else if (m.count("nickname")) {
                         nick = m.at("nickname").asString();
                     }
+                    std::string role = m.count("role") ? m.at("role").asString() : "member";
                     if (uid > 0 && !nick.empty()) {
                         members.emplace_back(uid, nick);
+                    }
+                    if (uid > 0 && !role.empty()) {
+                        GroupMemberCache::instance().setMemberRole(group_id, uid, role);
                     }
                 }
                 GroupMemberCache::instance().setMembers(group_id, members);
                 LOG_INFO("[Bot] Cached " + std::to_string(members.size()) + " members for group " + std::to_string(group_id));
+            });
+        
+        std::map<std::string, JsonValue> info_params;
+        info_params["group_id"] = JsonValue(group_id);
+        api_->callApiWithCallback("get_group_info", JsonValue(info_params),
+            [group_id](const ApiResponse& resp) {
+                if (resp.retcode != 0 || !resp.data.isObject()) return;
+                auto& d = resp.data.asObject();
+                std::string gname;
+                if (d.count("group_name")) gname = d.at("group_name").asString();
+                if (!gname.empty()) {
+                    GroupMemberCache::instance().setGroupName(group_id, gname);
+                    LOG_INFO("[Bot] Group " + std::to_string(group_id) + " name: " + gname);
+                }
             });
     }
     
     std::unique_ptr<WebSocketClient> ws_client_;
     std::unique_ptr<OneBotApi> api_;
     std::unique_ptr<PluginContext> context_;
+    std::filesystem::path base_path_;
+    std::filesystem::path config_dir_;
+    std::filesystem::path data_dir_;
     
     std::atomic<bool> initialized_{false};
     std::atomic<bool> running_{false};

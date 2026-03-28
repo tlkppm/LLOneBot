@@ -28,7 +28,7 @@ public:
     
     MessageType message_type = MessageType::Private;
     std::string sub_type;
-    int32_t message_id = 0;
+    int64_t message_id = 0;
     int64_t user_id = 0;
     int64_t group_id = 0;
     std::vector<MessageSegment> message;
@@ -64,7 +64,7 @@ public:
     int64_t operator_id = 0;
     int64_t target_id = 0;
     int64_t duration = 0;
-    int32_t message_id = 0;
+    int64_t message_id = 0;
 };
 
 class RequestEvent : public Event {
@@ -119,18 +119,20 @@ public:
             event->raw_data = json;
             event->post_type = post_type;
             
-            if (obj.find("time") != obj.end()) {
-                event->time = obj.at("time").asInt();
-            }
-            if (obj.find("self_id") != obj.end()) {
-                event->self_id = obj.at("self_id").asInt();
-            }
+            event->time = readInt64(obj, "time");
+            event->self_id = readInt64(obj, "self_id");
         }
         
         return event;
     }
     
 private:
+    static int64_t readInt64(const std::map<std::string, JsonValue>& obj, const std::string& key, int64_t fallback = 0) {
+        auto it = obj.find(key);
+        if (it == obj.end()) return fallback;
+        return it->second.toInt64(fallback);
+    }
+
     static std::unique_ptr<MessageEvent> parseMessageEvent(const JsonValue& json) {
         auto event = std::make_unique<MessageEvent>();
         const auto& obj = json.asObject();
@@ -144,24 +146,16 @@ private:
             event->sub_type = obj.at("sub_type").asString();
         }
         
-        if (obj.find("message_id") != obj.end()) {
-            event->message_id = static_cast<int32_t>(obj.at("message_id").asInt());
-        }
-        
-        if (obj.find("user_id") != obj.end()) {
-            event->user_id = obj.at("user_id").asInt();
-        }
-        
-        if (obj.find("group_id") != obj.end()) {
-            event->group_id = obj.at("group_id").asInt();
-        }
+        event->message_id = readInt64(obj, "message_id");
+        event->user_id = readInt64(obj, "user_id");
+        event->group_id = readInt64(obj, "group_id");
         
         if (obj.find("raw_message") != obj.end()) {
             event->raw_message = obj.at("raw_message").asString();
         }
         
         if (obj.find("font") != obj.end()) {
-            event->font = static_cast<int32_t>(obj.at("font").asInt());
+            event->font = static_cast<int32_t>(readInt64(obj, "font"));
         }
         
         if (obj.find("message") != obj.end()) {
@@ -206,11 +200,11 @@ private:
             const auto& sender = obj.at("sender");
             if (sender.isObject()) {
                 const auto& s = sender.asObject();
-                if (s.find("user_id") != s.end()) event->sender.user_id = s.at("user_id").asInt();
+                if (s.find("user_id") != s.end()) event->sender.user_id = readInt64(s, "user_id");
                 if (s.find("nickname") != s.end()) event->sender.nickname = s.at("nickname").asString();
                 if (s.find("card") != s.end()) event->sender.card = s.at("card").asString();
                 if (s.find("sex") != s.end()) event->sender.sex = s.at("sex").asString();
-                if (s.find("age") != s.end()) event->sender.age = static_cast<int32_t>(s.at("age").asInt());
+                if (s.find("age") != s.end()) event->sender.age = static_cast<int32_t>(readInt64(s, "age"));
                 if (s.find("area") != s.end()) event->sender.area = s.at("area").asString();
                 if (s.find("level") != s.end()) event->sender.level = s.at("level").asString();
                 if (s.find("role") != s.end()) event->sender.role = s.at("role").asString();
@@ -239,12 +233,12 @@ private:
         }
         
         if (obj.find("sub_type") != obj.end()) event->sub_type = obj.at("sub_type").asString();
-        if (obj.find("group_id") != obj.end()) event->group_id = obj.at("group_id").asInt();
-        if (obj.find("user_id") != obj.end()) event->user_id = obj.at("user_id").asInt();
-        if (obj.find("operator_id") != obj.end()) event->operator_id = obj.at("operator_id").asInt();
-        if (obj.find("target_id") != obj.end()) event->target_id = obj.at("target_id").asInt();
-        if (obj.find("duration") != obj.end()) event->duration = obj.at("duration").asInt();
-        if (obj.find("message_id") != obj.end()) event->message_id = static_cast<int32_t>(obj.at("message_id").asInt());
+        event->group_id = readInt64(obj, "group_id");
+        event->user_id = readInt64(obj, "user_id");
+        event->operator_id = readInt64(obj, "operator_id");
+        event->target_id = readInt64(obj, "target_id");
+        event->duration = readInt64(obj, "duration");
+        event->message_id = readInt64(obj, "message_id");
         
         return event;
     }
@@ -260,8 +254,8 @@ private:
         }
         
         if (obj.find("sub_type") != obj.end()) event->sub_type = obj.at("sub_type").asString();
-        if (obj.find("user_id") != obj.end()) event->user_id = obj.at("user_id").asInt();
-        if (obj.find("group_id") != obj.end()) event->group_id = obj.at("group_id").asInt();
+        event->user_id = readInt64(obj, "user_id");
+        event->group_id = readInt64(obj, "group_id");
         if (obj.find("comment") != obj.end()) event->comment = obj.at("comment").asString();
         if (obj.find("flag") != obj.end()) event->flag = obj.at("flag").asString();
         
@@ -280,7 +274,7 @@ private:
         
         if (obj.find("sub_type") != obj.end()) event->sub_type = obj.at("sub_type").asString();
         if (obj.find("status") != obj.end()) event->status = obj.at("status");
-        if (obj.find("interval") != obj.end()) event->interval = obj.at("interval").asInt();
+        event->interval = readInt64(obj, "interval");
         
         return event;
     }

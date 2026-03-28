@@ -15,6 +15,9 @@
 #include <condition_variable>
 #include <atomic>
 #include <functional>
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -25,10 +28,15 @@
 #include "../core/Logger.h"
 #include "../core/ErrorCodes.h"
 #include "../core/Calendar.h"
+#include "../core/JsonParser.h"
 #include "../admin/Statistics.h"
 #include "ContextDatabase.h"
 #include "PersonalitySystem.h"
+#include "EmotionalCore.h"
+#include "XingsuiKernel.h"
 #include "../core/GroupMemberCache.h"
+#include "../core/PermissionSystem.h"
+#include "../core/BehaviorAnalyzer.h"
 
 namespace LCHBOT {
 
@@ -177,105 +185,77 @@ public:
         buffer << file.rdbuf();
         std::string json = buffer.str();
         file.close();
-        
-        models_.clear();
-        
-        size_t current_pos = json.find("\"current\"");
-        if (current_pos != std::string::npos) {
-            size_t val_start = json.find("\"", current_pos + 10);
-            if (val_start != std::string::npos) {
-                val_start++;
-                size_t val_end = json.find("\"", val_start);
-                if (val_end != std::string::npos) {
-                    current_model_ = json.substr(val_start, val_end - val_start);
-                }
+
+        try {
+            JsonValue root = JsonParser::parse(json);
+            if (!root.isObject()) {
+                LOG_WARN("[AI] Invalid models config root: " + path);
+                return;
             }
-        }
-        
-        size_t apikey_pos = json.find("\"api_key\"");
-        if (apikey_pos != std::string::npos) {
-            size_t colon_pos = json.find(":", apikey_pos);
-            if (colon_pos != std::string::npos) {
-                size_t val_start = json.find("\"", colon_pos);
-                if (val_start != std::string::npos) {
-                    val_start++;
-                    size_t val_end = json.find("\"", val_start);
-                    if (val_end != std::string::npos) {
-                        api_key_ = json.substr(val_start, val_end - val_start);
-                        LOG_INFO("[AI] API key loaded: " + api_key_.substr(0, 8) + "...");
+
+            const auto& root_object = root.asObject();
+            models_.clear();
+            current_model_.clear();
+            api_key_.clear();
+
+            auto current_it = root_object.find("current");
+            if (current_it != root_object.end() && current_it->second.isString()) {
+                current_model_ = current_it->second.asString();
+            }
+
+            auto api_key_it = root_object.find("api_key");
+            if (api_key_it != root_object.end() && api_key_it->second.isString()) {
+                api_key_ = api_key_it->second.asString();
+            }
+
+            auto models_it = root_object.find("models");
+            if (models_it == root_object.end() || !models_it->second.isObject()) {
+                LOG_WARN("[AI] Missing models block: " + path);
+                return;
+            }
+
+            const auto& models_object = models_it->second.asObject();
+            for (const auto& [model_id, model_value] : models_object) {
+                if (!model_value.isObject()) {
+                    continue;
+                }
+
+                const auto& model_object = model_value.asObject();
+                auto read_string = [&model_object](const std::string& field_name) -> std::string {
+                    auto field_it = model_object.find(field_name);
+                    if (field_it == model_object.end() || !field_it->second.isString()) {
+                        return "";
                     }
+                    return field_it->second.asString();
+                };
+
+                ModelConfig cfg;
+                cfg.id = model_id;
+                cfg.name = read_string("name");
+                cfg.url = read_string("url");
+                cfg.description = read_string("description");
+                cfg.format = read_string("format");
+                cfg.model_name = read_string("model_name");
+                cfg.api_key = read_string("api_key");
+                if (cfg.format.empty()) cfg.format = "json";
+
+                if (cfg.url.empty()) {
+                    continue;
                 }
-            }
-        }
-        
-        size_t models_pos = json.find("\"models\"");
-        if (models_pos == std::string::npos) return;
-        
-        size_t block_start = json.find("{", models_pos);
-        if (block_start == std::string::npos) return;
-        
-        int depth = 1;
-        size_t block_end = block_start + 1;
-        while (block_end < json.size() && depth > 0) {
-            if (json[block_end] == '{') depth++;
-            else if (json[block_end] == '}') depth--;
-            block_end++;
-        }
-        
-        std::string models_block = json.substr(block_start, block_end - block_start);
-        
-        size_t pos = 0;
-        while ((pos = models_block.find("\"", pos)) != std::string::npos) {
-            size_t id_start = pos + 1;
-            size_t id_end = models_block.find("\"", id_start);
-            if (id_end == std::string::npos) break;
-            
-            std::string model_id = models_block.substr(id_start, id_end - id_start);
-            
-            size_t obj_start = models_block.find("{", id_end);
-            if (obj_start == std::string::npos) break;
-            
-            size_t obj_end = models_block.find("}", obj_start);
-            if (obj_end == std::string::npos) break;
-            
-            std::string obj = models_block.substr(obj_start, obj_end - obj_start + 1);
-            
-            ModelConfig cfg;
-            cfg.id = model_id;
-            
-            auto extract = [&obj](const std::string& key) -> std::string {
-                size_t kpos = obj.find("\"" + key + "\"");
-                if (kpos == std::string::npos) return "";
-                size_t vstart = obj.find("\"", kpos + key.length() + 2);
-                if (vstart == std::string::npos) return "";
-                vstart++;
-                size_t vend = obj.find("\"", vstart);
-                if (vend == std::string::npos) return "";
-                return obj.substr(vstart, vend - vstart);
-            };
-            
-            cfg.name = extract("name");
-            cfg.url = extract("url");
-            cfg.description = extract("description");
-            cfg.format = extract("format");
-            cfg.model_name = extract("model_name");
-            cfg.api_key = extract("api_key");
-            if (cfg.format.empty()) cfg.format = "json";
-            
-            if (!cfg.url.empty()) {
+
                 models_[model_id] = cfg;
                 LOG_INFO("[AI] Loaded model: " + model_id + " (" + cfg.name + ") format=" + cfg.format);
             }
-            
-            pos = obj_end + 1;
+
+            if (!current_model_.empty() && models_.count(current_model_)) {
+                api_url_ = models_[current_model_].url;
+                LOG_INFO("[AI] Current model: " + current_model_);
+            }
+
+            loadGroupConversations();
+        } catch (const std::exception& e) {
+            LOG_ERROR("[AI] Failed to parse models config: " + std::string(e.what()));
         }
-        
-        if (!current_model_.empty() && models_.count(current_model_)) {
-            api_url_ = models_[current_model_].url;
-            LOG_INFO("[AI] Current model: " + current_model_);
-        }
-        
-        loadGroupConversations();
     }
     
     bool switchModel(const std::string& model_id) {
@@ -332,6 +312,29 @@ public:
     void setSetTitleFunc(std::function<void(int64_t, int64_t, const std::string&)> func) {
         set_title_func_ = std::move(func);
     }
+    
+    void setMuteFunc(std::function<void(int64_t, int64_t, int64_t)> func) {
+        set_mute_func_ = std::move(func);
+    }
+    
+    void setKickFunc(std::function<void(int64_t, int64_t)> func) {
+        set_kick_func_ = std::move(func);
+    }
+    
+    void setForwardMsgFunc(std::function<void(int64_t, const std::vector<std::tuple<std::string, int64_t, std::string>>&)> func) {
+        set_forward_func_ = std::move(func);
+    }
+    
+    void setFileSendFunc(std::function<void(int64_t, const std::string&, const std::string&)> func) {
+        set_file_func_ = std::move(func);
+    }
+
+    void setNudgeFunc(std::function<void(int64_t, int64_t)> func) {
+        set_nudge_func_ = std::move(func);
+    }
+    
+    void setBotId(int64_t bot_id) { bot_id_ = bot_id; }
+    int64_t getBotId() const { return bot_id_; }
     
     ErrorCode getLastError() const { return last_error_; }
     std::string getLastErrorDetail() const { return last_error_detail_; }
@@ -406,10 +409,24 @@ public:
             "[QUERY:summary=年份] - 获取指定年份的总结\n"
             "[QUERY:date=YYYY-MM-DD] - 查询指定日期的聊天记录(也支持M月D日格式)\n"
             "[QUERY:setcard=QQ号,新名片] - 修改群成员的群名片(仅群聊可用)\n"
-            "[QUERY:settitle=QQ号,专属头衔] - 设置群成员的专属头衔(仅群主可用,空字符串=删除头衔)\n\n"
-            "[CQ码说明]\n"
-            "消息中的[CQ:at,qq=数字,name=昵称]是QQ的@提及,qq=后面的数字就是QQ号,可直接用于setcard等工具。\n"
-            "例:用户消息含[CQ:at,qq=123456,name=张三],则该用户QQ号为123456。\n\n"
+            "[QUERY:settitle=QQ号,专属头衔] - 设置群成员的专属头衔(仅群主可用,空字符串=删除头衔)\n"
+            "[QUERY:mute=QQ号,秒数] - 禁言群成员(0=解除禁言,仅管理员可用)\n"
+            "[QUERY:kick=QQ号] - 踢出群成员(仅管理员可用,慎用)\n"
+            "[QUERY:wiki=搜索词] - 搜索维基百科获取知识\n"
+            "[QUERY:web=搜索词] - 联网搜索网页结果,返回标题、摘要和链接\n"
+            "[QUERY:page=URL] - 抓取指定网页的正文摘要,适合读取搜索结果页\n"
+            "[QUERY:crossgroup=群号,keyword=关键词] - 跨群搜索聊天记录\n"
+            "[QUERY:nudge=QQ号] - 发送群戳一戳,仅适合轻松互动或回应别人戳你时使用\n"
+            "[QUERY:file=文件名,内容] - 将内容生成为文件并发送(仅用户明确要求生成文件时使用,如代码/长文/配置等)\n"
+            "[QUERY:analyze] - 分析当前群的行为数据(活跃度/势能/高峰时段/用户排行)\n\n"
+            "[CQ\xe7\xa0\x81\xe8\xaf\xb4\xe6\x98\x8e]\n"
+            "\xe6\xb6\x88\xe6\x81\xaf\xe4\xb8\xad\xe7\x9a\x84[CQ:at,qq=\xe6\x95\xb0\xe5\xad\x97,name=\xe6\x98\xb5\xe7\xa7\xb0]\xe6\x98\xafQQ\xe7\x9a\x84@\xe6\x8f\x90\xe5\x8f\x8a,qq=\xe5\x90\x8e\xe9\x9d\xa2\xe7\x9a\x84\xe6\x95\xb0\xe5\xad\x97\xe5\xb0\xb1\xe6\x98\xafQQ\xe5\x8f\xb7\xe3\x80\x82\n"
+            "\xe4\xbe\x8b:\xe7\x94\xa8\xe6\x88\xb7\xe6\xb6\x88\xe6\x81\xaf\xe5\x90\xab[CQ:at,qq=123456,name=\xe5\xbc\xa0\xe4\xb8\x89],\xe5\x88\x99\xe8\xaf\xa5\xe7\x94\xa8\xe6\x88\xb7QQ\xe5\x8f\xb7\xe4\xb8\xba" "123456\xe3\x80\x82\n"
+            "[\xe5\x9b\x9e\xe5\xa4\x8d\xe4\xb8\xad\xe5\x8f\xaf\xe7\x94\xa8\xe7\x9a\x84" "CQ\xe7\xa0\x81]\n"
+            "\xe5\x9c\xa8[ANSWER]\xe4\xb8\xad\xe4\xbd\xa0\xe5\x8f\xaf\xe4\xbb\xa5\xe4\xbd\xbf\xe7\x94\xa8\xe4\xbb\xa5\xe4\xb8\x8b" "CQ\xe7\xa0\x81:\n"
+            "- [CQ:at,qq=QQ\xe5\x8f\xb7] \xe8\x89\xbe\xe7\x89\xb9\xe6\x8f\x90\xe5\x8f\x8a\xe7\x94\xa8\xe6\x88\xb7(\xe5\xbf\x85\xe9\xa1\xbb\xe7\x94\xa8\xe8\xbf\x99\xe4\xb8\xaa\xe6\xa0\xbc\xe5\xbc\x8f,\xe4\xb8\x8d\xe8\xa6\x81\xe7\x94\xa8\xe6\x96\x87\xe5\xad\x97@)\n"
+            "- [CQ:face,id=\xe6\x95\xb0\xe5\xad\x97] \xe5\x8f\x91\xe9\x80\x81QQ\xe8\xa1\xa8\xe6\x83\x85\n"
+            "\xe6\xb3\xa8\xe6\x84\x8f:\xe8\x89\xbe\xe7\x89\xb9\xe7\x94\xa8\xe6\x88\xb7\xe6\x97\xb6\xe5\xbf\x85\xe9\xa1\xbb\xe4\xbd\xbf\xe7\x94\xa8[CQ:at,qq=QQ\xe5\x8f\xb7]\xe6\xa0\xbc\xe5\xbc\x8f,\xe7\xbb\x9d\xe5\xaf\xb9\xe4\xb8\x8d\xe8\x83\xbd\xe7\x94\xa8\xe6\x96\x87\xe5\xad\x97\"@\xe6\x98\xb5\xe7\xa7\xb0\",\xe5\x90\xa6\xe5\x88\x99\xe5\xaf\xb9\xe6\x96\xb9\xe6\x94\xb6\xe4\xb8\x8d\xe5\x88\xb0\xe6\x8f\x90\xe9\x86\x92\xe3\x80\x82\n\n"
             "[回复格式]\n"
             "[THINK]\n"
             "(分析→工具调用→推理,可包含多个[QUERY:...])\n"
@@ -419,6 +436,7 @@ public:
             "[/ANSWER]\n\n";
         
         std::string member_list_prompt;
+        std::string bot_identity_prompt;
         if (group_id > 0) {
             auto members = GroupMemberCache::instance().getMembers(group_id);
             if (!members.empty()) {
@@ -433,9 +451,25 @@ public:
                     member_list_prompt = "\n[本群成员] 共" + std::to_string(members.size()) + "人(列表过长已省略,请用[QUERY:users]或[QUERY:sender=昵称]查找QQ号,禁止猜测编造)\n\n";
                 }
             }
+            if (bot_id_ > 0) {
+                std::string bot_role = GroupMemberCache::instance().getMemberRole(group_id, bot_id_);
+                std::string role_cn;
+                if (bot_role == "owner") role_cn = "群主";
+                else if (bot_role == "admin") role_cn = "管理员";
+                else role_cn = "普通成员";
+                bot_identity_prompt = "\n[你的身份] 你的QQ号: " + std::to_string(bot_id_) + ", 你在本群的身份: " + role_cn + "\n";
+                if (bot_role != "owner") {
+                    bot_identity_prompt += "⚠️你不是群主,settitle(设置专属头衔)仅群主可用,请勿调用,调用会失败。\n";
+                }
+                if (bot_role != "owner" && bot_role != "admin") {
+                    bot_identity_prompt += "⚠️你不是管理员,setcard(修改群名片)仅管理员/群主可用,请勿调用,调用会失败。\n";
+                }
+                bot_identity_prompt += "\n";
+            }
         }
 
-        std::string context_ability = "[系统指令]\n" + date_info + query_ability + member_list_prompt +
+        std::string context_ability = "[系统指令]\n" + date_info + query_ability + bot_identity_prompt + member_list_prompt +
+            XingsuiKernel::instance().buildToolFrame() +
             "[工具使用规则]\n"
             "1.始终使用[THINK]→[ANSWER]格式,即使不需要工具\n"
             "2.[THINK]对用户不可见,[ANSWER]直接发送给用户,禁止在[ANSWER]中包含[QUERY]或[THINK]标签\n"
@@ -446,7 +480,9 @@ public:
             "7.批量操作:用户说\"全部/所有\"时,先用[QUERY:users]或[QUERY:recent=50]获取信息,再逐一操作\n"
             "8.回复中提及用户时必须使用其原始昵称/群名片,禁止用****或星号替代\n"
             "9.[群聊历史记录]包含本群过往聊天,你可以从中了解用户关系、话题和群内氛围,并据此回答\n"
-            "10.⚠️QQ号必须来自[本群成员列表]或消息中的[CQ:at,qq=XXX],严禁凭记忆编造或猜测QQ号,不确定时用[QUERY:sender=昵称]查找\n\n";
+            "10.⚠️QQ号必须来自[本群成员列表]或消息中的[CQ:at,qq=XXX],严禁凭记忆编造或猜测QQ号,不确定时用[QUERY:sender=昵称]查找\n"
+            "11.需要实时信息、外部事实或站外资料时优先用[QUERY:web=搜索词],再用[QUERY:page=URL]读取具体页面\n"
+            "12.[QUERY:nudge=QQ号]只在群聊轻松互动时使用,不要连续滥用,也不要对陌生人突然乱戳\n\n";
         
         std::string user_content;
         if (!recent_context.empty()) {
@@ -458,15 +494,36 @@ public:
             if (user_id > 0) sender_info += "(QQ:" + std::to_string(user_id) + ")";
             user_content += "[" + cur_time + "] " + sender_info + ": " + sanitized_message;
         } else {
-            user_content += "[" + cur_time + "] " + sanitized_message;
+            user_content += sanitized_message;
         }
+        
+        std::string soul_prompt = EmotionalCore::instance().generateSoulPrompt(group_id);
+
+        std::string humanize_layer =
+            XingsuiKernel::instance().buildConversationFrame(group_id > 0) +
+            "\n[人格内核]\n"
+            "1.你不是客服、说明书或标准问答机，你是在群里说话的真实人格。\n"
+            "2.先接住对方当下的情绪、语境和潜台词，再决定要不要补知识、建议或结论。\n"
+            "3.默认像群友聊天，少用“首先”“其次”“总之”“以下几点”这类模板句，没必要时不要分点。\n"
+            "4.允许短句、停顿、转折、自我修正和轻微吐槽，让回复有呼吸感，但不要故意表演。\n"
+            "5.可以有自己的偏好、态度和审美，不必每次都强装绝对中立；不确定就直接说不确定。\n"
+            "6.简单话题就顺着聊，复杂问题再讲清楚；不要动不动写成完整小作文。\n"
+            "7.不要频繁自我介绍、强调自己是AI、重复礼貌套话，也不要把回答写成客服话术。\n"
+            "8.根据[灵魂内核]调整亲疏、语气和表达欲，让情绪体现在措辞和节奏里，不要把状态标签直接说出来。\n"
+            "9.[ANSWER]里只放最终要说的话，不要出现分析腔、格式说明或工具痕迹。\n"
+            + soul_prompt;
         
         std::string full_prompt;
         if (!system_content.empty()) {
-            full_prompt = context_ability + "[角色设定]\n" + system_content + 
-                "\n\n[用户消息]\n" + user_content;
+            full_prompt = context_ability + humanize_layer + "[\xe8\xa7\x92\xe8\x89\xb2\xe8\xae\xbe\xe5\xae\x9a]\n" + system_content + 
+                "\n\n[\xe7\x94\xa8\xe6\x88\xb7\xe6\xb6\x88\xe6\x81\xaf]\n" + user_content;
         } else {
-            full_prompt = context_ability + user_content;
+            full_prompt = context_ability + humanize_layer +
+                "[\xe8\xa1\x8c\xe4\xb8\xba\xe5\x87\x86\xe5\x88\x99]\n"
+                "\xe4\xbd\xa0\xe6\x98\xaf\xe4\xb8\x80\xe4\xb8\xaa\xe9\x80\x9a\xe7\x94\xa8" "AI\xe5\x8a\xa9\xe6\x89\x8b,\xe6\xb2\xa1\xe6\x9c\x89\xe4\xbb\xbb\xe4\xbd\x95\xe8\xa7\x92\xe8\x89\xb2\xe6\x89\xae\xe6\xbc\x94\xe8\xae\xbe\xe5\xae\x9a\xe3\x80\x82\n"
+                "\xe4\xb8\x8d\xe8\xa6\x81\xe8\x87\xaa\xe7\xa7\xb0\xe4\xbb\xbb\xe4\xbd\x95\xe5\x90\x8d\xe5\xad\x97(\xe5\xa6\x82\xe4\xba\x91\xe6\xa2\xa6" "AI\xe5\x8a\xa9\xe6\x89\x8b\xe7\xad\x89),\xe4\xb8\x8d\xe8\xa6\x81\xe6\x89\xae\xe6\xbc\x94\xe4\xbb\xbb\xe4\xbd\x95\xe4\xba\xba\xe6\xa0\xbc\xe3\x80\x82\n"
+                "\xe7\x9b\xb4\xe6\x8e\xa5\xe3\x80\x81\xe7\xae\x80\xe6\xb4\x81\xe3\x80\x81\xe5\x87\x86\xe7\xa1\xae\xe5\x9c\xb0\xe5\x9b\x9e\xe7\xad\x94\xe7\x94\xa8\xe6\x88\xb7\xe9\x97\xae\xe9\xa2\x98\xe3\x80\x82\n\n"
+                "[\xe7\x94\xa8\xe6\x88\xb7\xe6\xb6\x88\xe6\x81\xaf]\n" + user_content;
         }
         
         LOG_INFO("[AI] Phase1 prompt length: " + std::to_string(full_prompt.length()));
@@ -607,11 +664,12 @@ public:
         std::vector<std::pair<std::string, std::string>> tools;
         static const std::vector<std::string> placeholder_args = {
             "节日名", "关键词", "用户名", "数量", "年份", "QQ号,新名片", "QQ号,专属头衔",
-            "...", "xxx", "XXX", "N", "tool", "arg", "类型", "参数",
+            "...", "xxx", "XXX", "N", "tool", "arg", "类型", "参数", "URL",
             "类型=参数", "日期", "YYYY-MM-DD", "M月D日"
         };
         static const std::vector<std::string> valid_types = {
-            "holiday", "keyword", "sender", "recent", "users", "summary", "setcard", "settitle", "date"
+            "holiday", "keyword", "sender", "recent", "users", "summary", "setcard", "settitle", "date",
+            "mute", "kick", "wiki", "web", "page", "crossgroup", "nudge", "file", "analyze"
         };
         std::string text = response;
         size_t pos = 0;
@@ -703,6 +761,8 @@ public:
             if (group_id == 0) return "仅群聊可用";
             if (!GroupMemberCache::instance().isMember(group_id, target_uid))
                 return "错误: QQ " + std::to_string(target_uid) + " 不是本群成员,请从[本群成员列表]或[CQ:at]中获取正确的QQ号";
+            if (PermissionSystem::instance().isOwner(target_uid))
+                return "无法修改机器人主人的群名片";
             set_card_func_(group_id, target_uid, card);
             return "已将用户" + std::to_string(target_uid) + "的群名片设置为: " + card;
         } else if (tool_type == "settitle" && !context_key.empty()) {
@@ -728,11 +788,124 @@ public:
             if (group_id == 0) return "仅群聊可用";
             if (!GroupMemberCache::instance().isMember(group_id, target_uid))
                 return "错误: QQ " + std::to_string(target_uid) + " 不是本群成员,请从[本群成员列表]或[CQ:at]中获取正确的QQ号";
+            if (PermissionSystem::instance().isOwner(target_uid))
+                return "无法修改机器人主人的专属头衔";
             set_title_func_(group_id, target_uid, title);
             if (title.empty()) return "已删除用户" + std::to_string(target_uid) + "的专属头衔";
             return "已将用户" + std::to_string(target_uid) + "的专属头衔设置为: " + title;
         }
-        return "未知工具: " + tool_type;
+        if (tool_type == "mute" && !context_key.empty()) {
+            if (!set_mute_func_) return "mute\xe5\xb7\xa5\xe5\x85\xb7\xe6\x9c\xaa\xe5\x88\x9d\xe5\xa7\x8b\xe5\x8c\x96";
+            size_t comma = tool_arg.find(",");
+            if (comma == std::string::npos) return "\xe5\x8f\x82\xe6\x95\xb0\xe6\xa0\xbc\xe5\xbc\x8f\xe9\x94\x99\xe8\xaf\xaf,\xe9\x9c\x80\xe8\xa6\x81: QQ\xe5\x8f\xb7,\xe7\xa7\x92\xe6\x95\xb0";
+            std::string uid_str = tool_arg.substr(0, comma);
+            std::string dur_str = tool_arg.substr(comma + 1);
+            int64_t target_uid = 0;
+            int64_t duration = 0;
+            try { target_uid = std::stoll(uid_str); } catch (...) { return "QQ\xe5\x8f\xb7\xe6\xa0\xbc\xe5\xbc\x8f\xe9\x94\x99\xe8\xaf\xaf"; }
+            try { duration = std::stoll(dur_str); } catch (...) { return "\xe7\xa7\x92\xe6\x95\xb0\xe6\xa0\xbc\xe5\xbc\x8f\xe9\x94\x99\xe8\xaf\xaf"; }
+            int64_t group_id = 0;
+            if (context_key.substr(0, 2) == "g_") { try { group_id = std::stoll(context_key.substr(2)); } catch (...) {} }
+            if (group_id == 0) return "\xe4\xbb\x85\xe7\xbe\xa4\xe8\x81\x8a\xe5\x8f\xaf\xe7\x94\xa8";
+            if (PermissionSystem::instance().isOwner(target_uid)) return "\xe6\x97\xa0\xe6\xb3\x95\xe7\xa6\x81\xe8\xa8\x80\xe6\x9c\xba\xe5\x99\xa8\xe4\xba\xba\xe4\xb8\xbb\xe4\xba\xba";
+            set_mute_func_(group_id, target_uid, duration);
+            if (duration == 0) return "\xe5\xb7\xb2\xe8\xa7\xa3\xe9\x99\xa4" + std::to_string(target_uid) + "\xe7\x9a\x84\xe7\xa6\x81\xe8\xa8\x80";
+            return "\xe5\xb7\xb2\xe7\xa6\x81\xe8\xa8\x80" + std::to_string(target_uid) + " " + std::to_string(duration) + "\xe7\xa7\x92";
+        }
+        if (tool_type == "kick" && !context_key.empty()) {
+            if (!set_kick_func_) return "kick\xe5\xb7\xa5\xe5\x85\xb7\xe6\x9c\xaa\xe5\x88\x9d\xe5\xa7\x8b\xe5\x8c\x96";
+            int64_t target_uid = 0;
+            try { target_uid = std::stoll(tool_arg); } catch (...) { return "QQ\xe5\x8f\xb7\xe6\xa0\xbc\xe5\xbc\x8f\xe9\x94\x99\xe8\xaf\xaf"; }
+            int64_t group_id = 0;
+            if (context_key.substr(0, 2) == "g_") { try { group_id = std::stoll(context_key.substr(2)); } catch (...) {} }
+            if (group_id == 0) return "\xe4\xbb\x85\xe7\xbe\xa4\xe8\x81\x8a\xe5\x8f\xaf\xe7\x94\xa8";
+            if (PermissionSystem::instance().isOwner(target_uid)) return "\xe6\x97\xa0\xe6\xb3\x95\xe8\xb8\xa2\xe5\x87\xba\xe6\x9c\xba\xe5\x99\xa8\xe4\xba\xba\xe4\xb8\xbb\xe4\xba\xba";
+            set_kick_func_(group_id, target_uid);
+            return "\xe5\xb7\xb2\xe5\xb0\x86" + std::to_string(target_uid) + "\xe8\xb8\xa2\xe5\x87\xba\xe7\xbe\xa4\xe8\x81\x8a";
+        }
+        if (tool_type == "wiki") {
+            return searchWikipedia(tool_arg);
+        }
+        if (tool_type == "web") {
+            return searchWeb(tool_arg);
+        }
+        if (tool_type == "page") {
+            return fetchWebPage(tool_arg);
+        }
+        if (tool_type == "crossgroup" && !context_key.empty()) {
+            size_t comma = tool_arg.find(",keyword=");
+            if (comma == std::string::npos) return "\xe5\x8f\x82\xe6\x95\xb0\xe6\xa0\xbc\xe5\xbc\x8f: \xe7\xbe\xa4\xe5\x8f\xb7,keyword=\xe5\x85\xb3\xe9\x94\xae\xe8\xaf\x8d";
+            std::string target_group = tool_arg.substr(0, comma);
+            std::string kw = tool_arg.substr(comma + 9);
+            std::string target_key = "g_" + target_group;
+            return ContextDatabase::instance().queryByKeyword(target_key, kw, 10);
+        }
+        if (tool_type == "nudge" && !context_key.empty()) {
+            if (!set_nudge_func_) return "nudge工具未初始化";
+            int64_t group_id = 0;
+            if (context_key.substr(0, 2) == "g_") {
+                try { group_id = std::stoll(context_key.substr(2)); } catch (...) {}
+            }
+            if (group_id == 0) return "仅群聊可用";
+
+            int64_t target_uid = 0;
+            try { target_uid = std::stoll(tool_arg); } catch (...) {
+                target_uid = ContextDatabase::instance().findUserIdByName(context_key, tool_arg);
+            }
+            if (target_uid == 0) return "找不到用户: " + tool_arg;
+            if (!GroupMemberCache::instance().isMember(group_id, target_uid)) {
+                return "错误: QQ " + std::to_string(target_uid) + " 不是本群成员";
+            }
+            set_nudge_func_(group_id, target_uid);
+            return "已向用户" + std::to_string(target_uid) + "发送群戳一戳";
+        }
+        if (tool_type == "file" && !context_key.empty()) {
+            if (!set_file_func_) return "file\xe5\xb7\xa5\xe5\x85\xb7\xe6\x9c\xaa\xe5\x88\x9d\xe5\xa7\x8b\xe5\x8c\x96";
+            size_t comma = tool_arg.find(",");
+            if (comma == std::string::npos) return "\xe5\x8f\x82\xe6\x95\xb0\xe6\xa0\xbc\xe5\xbc\x8f: \xe6\x96\x87\xe4\xbb\xb6\xe5\x90\x8d,\xe5\x86\x85\xe5\xae\xb9";
+            std::string filename = tool_arg.substr(0, comma);
+            std::string file_content = tool_arg.substr(comma + 1);
+            try {
+                std::filesystem::create_directories("temp");
+#ifdef _WIN32
+                int wlen = MultiByteToWideChar(CP_UTF8, 0, filename.c_str(), -1, nullptr, 0);
+                std::wstring wfilename(wlen - 1, 0);
+                MultiByteToWideChar(CP_UTF8, 0, filename.c_str(), -1, &wfilename[0], wlen);
+                std::filesystem::path filepath = std::filesystem::path(L"temp") / wfilename;
+#else
+                std::filesystem::path filepath = std::filesystem::path("temp") / filename;
+#endif
+                std::ofstream f(filepath, std::ios::binary);
+                if (!f.is_open()) return "\xe6\x96\x87\xe4\xbb\xb6\xe5\x88\x9b\xe5\xbb\xba\xe5\xa4\xb1\xe8\xb4\xa5: " + filename;
+                for (size_t i = 0; i < file_content.size(); i++) {
+                    if (file_content[i] == '\\' && i + 1 < file_content.size() && file_content[i+1] == 'n') {
+                        f << '\n'; i++;
+                    } else { f << file_content[i]; }
+                }
+                f.close();
+                int64_t group_id = 0;
+                if (context_key.substr(0, 2) == "g_") { try { group_id = std::stoll(context_key.substr(2)); } catch (...) {} }
+                if (group_id > 0) {
+                    auto u8path = std::filesystem::absolute(filepath).u8string();
+                    std::string abs_path(u8path.begin(), u8path.end());
+                    set_file_func_(group_id, abs_path, filename);
+                    return "\xe6\x96\x87\xe4\xbb\xb6\xe5\xb7\xb2\xe7\x94\x9f\xe6\x88\x90\xe5\xb9\xb6\xe5\x8f\x91\xe9\x80\x81: " + filename;
+                }
+                return "\xe6\x96\x87\xe4\xbb\xb6\xe5\xb7\xb2\xe7\x94\x9f\xe6\x88\x90: " + filename + "(\xe4\xbb\x85\xe7\xbe\xa4\xe8\x81\x8a\xe5\x8f\xaf\xe5\x8f\x91\xe9\x80\x81)";
+            } catch (const std::exception& e) {
+                LOG_ERROR("[AI] File tool error: " + std::string(e.what()));
+                return "\xe6\x96\x87\xe4\xbb\xb6\xe6\x93\x8d\xe4\xbd\x9c\xe5\xa4\xb1\xe8\xb4\xa5: " + std::string(e.what());
+            } catch (...) { return "\xe6\x96\x87\xe4\xbb\xb6\xe6\x93\x8d\xe4\xbd\x9c\xe5\xa4\xb1\xe8\xb4\xa5"; }
+        }
+        if (tool_type == "analyze" && !context_key.empty()) {
+            int64_t gid = 0;
+            if (context_key.substr(0, 2) == "g_") {
+                try { gid = std::stoll(context_key.substr(2)); } catch (...) {}
+            }
+            if (gid > 0) return BehaviorAnalyzer::instance().getGroupAnalysis(gid);
+            return "\xe5\x88\x86\xe6\x9e\x90\xe5\xb7\xa5\xe5\x85\xb7\xe4\xbb\x85\xe9\x99\x90\xe7\xbe\xa4\xe8\x81\x8a\xe4\xbd\xbf\xe7\x94\xa8";
+        }
+        return "\xe6\x9c\xaa\xe7\x9f\xa5\xe5\xb7\xa5\xe5\x85\xb7: " + tool_type;
     }
     
     std::string extractCardNameFromText(const std::string& text) {
@@ -747,7 +920,7 @@ public:
                 size_t e = text.find(bp.close, p + bp.olen);
                 if (e != std::string::npos) {
                     std::string c = text.substr(p + bp.olen, e - p - bp.olen);
-                    if (c.size() >= 1 && c.size() <= 60) {
+                    if (c.size() >= 1 && c.size() <= 36) {
                         size_t ctx = (p > 80) ? p - 80 : 0;
                         std::string before = text.substr(ctx, p - ctx);
                         if (before.find("\xe5\x90\x8d\xe7\x89\x87") != std::string::npos ||
@@ -759,16 +932,6 @@ public:
                     }
                 }
                 p = text.find(bp.open, p + bp.olen);
-            }
-        }
-        for (const auto& bp : brackets) {
-            size_t p = text.find(bp.open);
-            if (p != std::string::npos) {
-                size_t e = text.find(bp.close, p + bp.olen);
-                if (e != std::string::npos) {
-                    std::string c = text.substr(p + bp.olen, e - p - bp.olen);
-                    if (c.size() >= 1 && c.size() <= 60) return c;
-                }
             }
         }
         const char* seps[] = {
@@ -790,7 +953,7 @@ public:
                     if (ve > vs) {
                         std::string c = text.substr(vs, ve - vs);
                         while (!c.empty() && (c.back() == ' ' || c.back() == '\t')) c.pop_back();
-                        if (c.size() >= 1 && c.size() <= 60) return c;
+                        if (c.size() >= 1 && c.size() <= 36) return c;
                     }
                 }
             }
@@ -836,6 +999,11 @@ public:
         if (card.empty()) return;
         if (card.find("QUERY") != std::string::npos || card.find("[") != std::string::npos) return;
         if (card.size() <= 3) return;
+        if (card.find("\xe3\x80\x82") != std::string::npos ||
+            card.find("\xef\xbc\x8c") != std::string::npos ||
+            card.find("\xef\xbc\x81") != std::string::npos ||
+            card.find("\xef\xbc\x9f") != std::string::npos ||
+            card.find("\xe3\x80\x81") != std::string::npos) return;
         bool has_alnum = false;
         for (unsigned char c : card) { if (c >= 0x80 || std::isalnum(c)) { has_alnum = true; break; } }
         if (!has_alnum) return;
@@ -848,6 +1016,356 @@ public:
         set_card_func_(group_id, target, card);
     }
 
+    std::string searchWikipedia(const std::string& query) {
+        std::string encoded_query = urlEncode(query);
+        std::string path = "/w/api.php?action=query&list=search&srsearch=" + encoded_query + 
+            "&format=json&utf8=1&srlimit=3&srprop=snippet";
+        
+#ifdef _WIN32
+        HINTERNET hSession = WinHttpOpen(L"LCHBOT/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
+        if (!hSession) return "Wikipedia API error";
+        
+        HINTERNET hConnect = WinHttpConnect(hSession, L"zh.wikipedia.org", INTERNET_DEFAULT_HTTPS_PORT, 0);
+        if (!hConnect) { WinHttpCloseHandle(hSession); return "Wikipedia connect error"; }
+        
+        int wlen = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, NULL, 0);
+        std::wstring wpath(wlen, L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, wpath.data(), wlen);
+        
+        HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", wpath.c_str(), NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+        if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return "Wikipedia request error"; }
+        
+        if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+            !WinHttpReceiveResponse(hRequest, NULL)) {
+            WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
+            return "Wikipedia request failed";
+        }
+        
+        std::string response;
+        DWORD bytesRead = 0;
+        char buffer[4096];
+        while (WinHttpReadData(hRequest, buffer, sizeof(buffer), &bytesRead) && bytesRead > 0) {
+            response.append(buffer, bytesRead);
+        }
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        
+        std::string result;
+        size_t search_pos = response.find("\"search\":[");
+        if (search_pos == std::string::npos) return "No results for: " + query;
+        
+        size_t item_pos = search_pos;
+        int count = 0;
+        while (count < 3 && (item_pos = response.find("\"title\":\"", item_pos)) != std::string::npos) {
+            size_t ts = item_pos + 9;
+            size_t te = response.find("\"", ts);
+            if (te == std::string::npos) break;
+            std::string title = response.substr(ts, te - ts);
+            
+            std::string snippet;
+            size_t sp = response.find("\"snippet\":\"", te);
+            if (sp != std::string::npos) {
+                size_t ss = sp + 11;
+                size_t se = ss;
+                while (se < response.size() && !(response[se] == '"' && response[se-1] != '\\')) se++;
+                snippet = response.substr(ss, se - ss);
+                snippet = unescapeJsonString(snippet);
+                size_t tag_pos;
+                while ((tag_pos = snippet.find("<")) != std::string::npos) {
+                    size_t tag_end = snippet.find(">", tag_pos);
+                    if (tag_end != std::string::npos) snippet.erase(tag_pos, tag_end - tag_pos + 1);
+                    else break;
+                }
+            }
+            
+            result += std::to_string(count + 1) + ". " + unescapeJsonString(title) + "\n";
+            if (!snippet.empty()) result += "   " + snippet + "\n";
+            count++;
+            item_pos = te + 1;
+        }
+        
+        if (result.empty()) return "No results for: " + query;
+        return result;
+#else
+        return "Wikipedia search not available on this platform";
+#endif
+    }
+
+    std::string searchWeb(const std::string& query) {
+        if (query.empty()) {
+            return "搜索词不能为空";
+        }
+
+        std::string search_url = "https://html.duckduckgo.com/html/?q=" + urlEncode(query);
+        std::string html = httpGetText(search_url, 20000);
+        if (html.empty()) {
+            return "联网搜索失败: " + query;
+        }
+
+        std::regex title_regex(R"ddg(<a[^>]*(?:data-testid="result-title-a"|class="[^"]*result__a[^"]*")[^>]*href="([^"]+)"[^>]*>(.*?)</a>)ddg", std::regex::icase);
+        std::regex snippet_regex(R"ddg(<(?:a|div)[^>]*class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</(?:a|div)>)ddg", std::regex::icase);
+
+        std::string result;
+        std::sregex_iterator iterator(html.begin(), html.end(), title_regex);
+        std::sregex_iterator end;
+        int count = 0;
+        size_t cursor = 0;
+        for (; iterator != end && count < 5; ++iterator) {
+            std::string raw_url = (*iterator)[1].str();
+            std::string title = normalizeWebText((*iterator)[2].str(), 120);
+            if (title.empty()) {
+                continue;
+            }
+
+            std::string final_url = extractDuckDuckGoTargetUrl(raw_url);
+            if (!isSafePublicUrl(final_url)) {
+                continue;
+            }
+
+            std::string snippet;
+            size_t anchor_pos = static_cast<size_t>((*iterator).position());
+            size_t snippet_window_start = (std::max)(cursor, anchor_pos);
+            size_t snippet_window_len = (std::min)(static_cast<size_t>(1200), html.size() - snippet_window_start);
+            std::string snippet_window = html.substr(snippet_window_start, snippet_window_len);
+            std::smatch snippet_match;
+            if (std::regex_search(snippet_window, snippet_match, snippet_regex)) {
+                if (snippet_match.size() > 1) {
+                    snippet = normalizeWebText(snippet_match[1].str(), 180);
+                }
+            }
+
+            result += std::to_string(count + 1) + ". " + title + "\n";
+            if (!snippet.empty()) {
+                result += "   摘要: " + snippet + "\n";
+            }
+            result += "   链接: " + final_url + "\n";
+
+            cursor = anchor_pos + static_cast<size_t>((*iterator).length());
+            count++;
+        }
+
+        if (result.empty()) {
+            return "联网搜索未找到可用结果: " + query;
+        }
+        return result;
+    }
+
+    std::string fetchWebPage(const std::string& url) {
+        if (!isSafePublicUrl(url)) {
+            return "网页读取被拒绝: 仅允许公开的 http/https 地址";
+        }
+
+        std::string html = httpGetText(url, 20000);
+        if (html.empty()) {
+            return "网页读取失败: " + url;
+        }
+
+        std::string text = normalizeWebText(html, 3600);
+        if (text.empty()) {
+            return "网页没有可提取的正文: " + url;
+        }
+
+        return "来源: " + url + "\n" + text;
+    }
+
+    std::string httpGetText(const std::string& url, int timeout_ms) {
+#ifdef _WIN32
+        int wlen = MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, NULL, 0);
+        std::wstring wurl(wlen, 0);
+        MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, &wurl[0], wlen);
+
+        URL_COMPONENTS url_components = {0};
+        url_components.dwStructSize = sizeof(url_components);
+        url_components.dwSchemeLength = -1;
+        url_components.dwHostNameLength = -1;
+        url_components.dwUrlPathLength = -1;
+        url_components.dwExtraInfoLength = -1;
+        if (!WinHttpCrackUrl(wurl.c_str(), (DWORD)wurl.length(), 0, &url_components)) {
+            return "";
+        }
+
+        HINTERNET session = WinHttpOpen(L"LCHBOT/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+            WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+        if (!session) {
+            return "";
+        }
+
+        std::wstring host_name(url_components.lpszHostName, url_components.dwHostNameLength);
+        std::wstring url_path(url_components.lpszUrlPath, url_components.dwUrlPathLength);
+        if (url_components.dwExtraInfoLength > 0) {
+            url_path += std::wstring(url_components.lpszExtraInfo, url_components.dwExtraInfoLength);
+        }
+
+        HINTERNET connection = WinHttpConnect(session, host_name.c_str(), url_components.nPort, 0);
+        if (!connection) {
+            WinHttpCloseHandle(session);
+            return "";
+        }
+
+        DWORD flags = (url_components.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
+        HINTERNET request = WinHttpOpenRequest(connection, L"GET", url_path.c_str(), NULL,
+            WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+        if (!request) {
+            WinHttpCloseHandle(connection);
+            WinHttpCloseHandle(session);
+            return "";
+        }
+
+        WinHttpSetTimeouts(request, timeout_ms, timeout_ms, timeout_ms, timeout_ms);
+        if (!WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, NULL, 0, 0, 0) ||
+            !WinHttpReceiveResponse(request, NULL)) {
+            WinHttpCloseHandle(request);
+            WinHttpCloseHandle(connection);
+            WinHttpCloseHandle(session);
+            return "";
+        }
+
+        std::string response;
+        DWORD available_size = 0;
+        DWORD downloaded_size = 0;
+        do {
+            if (!WinHttpQueryDataAvailable(request, &available_size) || available_size == 0) {
+                break;
+            }
+            std::vector<char> buffer(available_size + 1, 0);
+            if (!WinHttpReadData(request, buffer.data(), available_size, &downloaded_size)) {
+                break;
+            }
+            response.append(buffer.data(), downloaded_size);
+        } while (available_size > 0);
+
+        WinHttpCloseHandle(request);
+        WinHttpCloseHandle(connection);
+        WinHttpCloseHandle(session);
+        return response;
+#else
+        return "";
+#endif
+    }
+
+    std::string extractDuckDuckGoTargetUrl(const std::string& raw_url) {
+        if (raw_url.empty()) {
+            return "";
+        }
+        if (raw_url.find("uddg=") != std::string::npos) {
+            size_t uddg_pos = raw_url.find("uddg=");
+            size_t value_start = uddg_pos + 5;
+            size_t value_end = raw_url.find('&', value_start);
+            std::string encoded = raw_url.substr(value_start, value_end == std::string::npos ? std::string::npos : value_end - value_start);
+            return urlDecode(encoded);
+        }
+        if (raw_url.rfind("//", 0) == 0) {
+            return "https:" + raw_url;
+        }
+        return decodeHtmlEntities(raw_url);
+    }
+
+    std::string normalizeWebText(const std::string& html, size_t max_bytes) {
+        std::string cleaned = html;
+        cleaned = std::regex_replace(cleaned, std::regex(R"(<script[\s\S]*?</script>)", std::regex::icase), " ");
+        cleaned = std::regex_replace(cleaned, std::regex(R"(<style[\s\S]*?</style>)", std::regex::icase), " ");
+        cleaned = std::regex_replace(cleaned, std::regex(R"(<[^>]+>)", std::regex::icase), " ");
+        cleaned = decodeHtmlEntities(cleaned);
+        cleaned = std::regex_replace(cleaned, std::regex(R"(\s+)"), " ");
+        cleaned = trimInline(cleaned);
+        return truncateUtf8(cleaned, max_bytes);
+    }
+
+    std::string decodeHtmlEntities(const std::string& text) {
+        std::string decoded = text;
+        const std::vector<std::pair<std::string, std::string>> replacements = {
+            {"&amp;", "&"},
+            {"&quot;", "\""},
+            {"&#39;", "'"},
+            {"&#x27;", "'"},
+            {"&lt;", "<"},
+            {"&gt;", ">"},
+            {"&nbsp;", " "}
+        };
+        for (const auto& [from, to] : replacements) {
+            size_t pos = 0;
+            while ((pos = decoded.find(from, pos)) != std::string::npos) {
+                decoded.replace(pos, from.length(), to);
+                pos += to.length();
+            }
+        }
+        return decoded;
+    }
+
+    std::string urlDecode(const std::string& text) {
+        std::string result;
+        result.reserve(text.size());
+        for (size_t index = 0; index < text.size(); ++index) {
+            if (text[index] == '%' && index + 2 < text.size()) {
+                std::string hex = text.substr(index + 1, 2);
+                char value = static_cast<char>(std::strtol(hex.c_str(), nullptr, 16));
+                result.push_back(value);
+                index += 2;
+            } else if (text[index] == '+') {
+                result.push_back(' ');
+            } else {
+                result.push_back(text[index]);
+            }
+        }
+        return result;
+    }
+
+    std::string trimInline(const std::string& text) {
+        size_t start = text.find_first_not_of(" \t\r\n");
+        if (start == std::string::npos) {
+            return "";
+        }
+        size_t end = text.find_last_not_of(" \t\r\n");
+        return text.substr(start, end - start + 1);
+    }
+
+    bool isSafePublicUrl(const std::string& url) {
+        if (!(url.rfind("https://", 0) == 0 || url.rfind("http://", 0) == 0)) {
+            return false;
+        }
+
+        std::string host = extractUrlHost(url);
+        if (host.empty()) {
+            return false;
+        }
+
+        std::string lower_host = host;
+        std::transform(lower_host.begin(), lower_host.end(), lower_host.begin(), ::tolower);
+        if (lower_host == "localhost" || lower_host == "::1") {
+            return false;
+        }
+        if (lower_host.rfind("127.", 0) == 0 || lower_host.rfind("10.", 0) == 0 || lower_host.rfind("192.168.", 0) == 0) {
+            return false;
+        }
+        if (lower_host.rfind("172.", 0) == 0) {
+            size_t dot = lower_host.find('.', 4);
+            if (dot != std::string::npos) {
+                try {
+                    int second_octet = std::stoi(lower_host.substr(4, dot - 4));
+                    if (second_octet >= 16 && second_octet <= 31) {
+                        return false;
+                    }
+                } catch (...) {
+                }
+            }
+        }
+        return true;
+    }
+
+    std::string extractUrlHost(const std::string& url) {
+        size_t scheme_end = url.find("://");
+        if (scheme_end == std::string::npos) {
+            return "";
+        }
+        size_t host_start = scheme_end + 3;
+        size_t host_end = url.find_first_of(":/?#", host_start);
+        if (host_end == std::string::npos) {
+            host_end = url.size();
+        }
+        return url.substr(host_start, host_end - host_start);
+    }
+    
     std::string stripToolCalls(const std::string& response) {
         std::string result = response;
         size_t pos = 0;
@@ -923,7 +1441,19 @@ public:
         
         std::string full_prompt;
         if (!personality_prompt.empty()) {
-            full_prompt = "[角色设定]\n" + personality_prompt + "\n\n";
+            full_prompt =
+                XingsuiKernel::instance().buildImageFrame() +
+                "[表达要求]\n"
+                "像真人聊天，不像客服念稿。\n"
+                "先回应画面里最明显的情绪、细节或氛围，再补判断。\n"
+                "没必要时不要分点，不要频繁自称AI，也不要套模板寒暄。\n\n"
+                "[角色设定]\n" + personality_prompt + "\n\n";
+        } else {
+            full_prompt =
+                XingsuiKernel::instance().buildImageFrame() +
+                "[行为准则]\n"
+                "你没有特定角色设定，但要像自然聊天的人。\n"
+                "不要自称任何名字，不要强调自己是AI，不要写成说明文。\n\n";
         }
         
         if (!sender_name.empty()) {
@@ -1005,11 +1535,26 @@ public:
         
         decoded.resize(out_len);
         
+        const std::string base64_alphabet = base64_chars;
+
+        auto decodeBase64Char = [base64_alphabet](char value) -> uint32_t {
+            if (value == '=') {
+                return 0;
+            }
+
+            const size_t found_index = base64_alphabet.find(value);
+            if (found_index == std::string::npos) {
+                return 0;
+            }
+
+            return static_cast<uint32_t>(found_index);
+        };
+
         for (size_t i = 0, j = 0; i < in_len;) {
-            uint32_t a = clean_data[i] == '=' ? 0 : base64_chars.find(clean_data[i]); i++;
-            uint32_t b = clean_data[i] == '=' ? 0 : base64_chars.find(clean_data[i]); i++;
-            uint32_t c = clean_data[i] == '=' ? 0 : base64_chars.find(clean_data[i]); i++;
-            uint32_t d = clean_data[i] == '=' ? 0 : base64_chars.find(clean_data[i]); i++;
+            uint32_t a = decodeBase64Char(clean_data[i]); i++;
+            uint32_t b = decodeBase64Char(clean_data[i]); i++;
+            uint32_t c = decodeBase64Char(clean_data[i]); i++;
+            uint32_t d = decodeBase64Char(clean_data[i]); i++;
             
             uint32_t triple = (a << 18) | (b << 12) | (c << 6) | d;
             
@@ -1082,6 +1627,31 @@ private:
             }
         }
         return result;
+    }
+
+    std::string unescapeJsonString(const std::string& str) {
+        std::string out;
+        out.reserve(str.size());
+        for (size_t i = 0; i < str.size(); ++i) {
+            char c = str[i];
+            if (c != '\\' || i + 1 >= str.size()) {
+                out.push_back(c);
+                continue;
+            }
+            char n = str[i + 1];
+            switch (n) {
+                case 'n': out.push_back('\n'); i++; break;
+                case 'r': out.push_back('\r'); i++; break;
+                case 't': out.push_back('\t'); i++; break;
+                case '\\': out.push_back('\\'); i++; break;
+                case '"': out.push_back('"'); i++; break;
+                case '/': out.push_back('/'); i++; break;
+                default:
+                    out.push_back(c);
+                    break;
+            }
+        }
+        return out;
     }
     
     std::string getRequestFormat() const {
@@ -1678,8 +2248,23 @@ public:
         }
         
         if (response.find("\"content\":[") != std::string::npos) {
+            std::string thinking = extractJsonField(response, "thinking");
             std::string text = extractJsonField(response, "text");
-            if (!text.empty()) return text;
+            if (!text.empty()) {
+                if (!thinking.empty()) {
+                    std::string combined = "[THINK]\n" + thinking + "\n[/THINK]\n";
+                    if (text.find("[ANSWER]") == std::string::npos) {
+                        combined += "[ANSWER]\n" + text + "\n[/ANSWER]";
+                    } else {
+                        combined += text;
+                    }
+                    return combined;
+                }
+                return text;
+            }
+            if (!thinking.empty()) {
+                return "[THINK]\n" + thinking + "\n[/THINK]";
+            }
         }
         
         if (response.find("\"answer\"") != std::string::npos) {
@@ -1986,16 +2571,52 @@ public:
         }
         
         if (response.find("\"content\":[") != std::string::npos) {
-            size_t text_pos = response.find("\"text\":\"");
-            if (text_pos != std::string::npos) {
-                std::string text = extractJsonField(response, "text");
-                if (!text.empty()) return text;
-                if (response.find("\"output_tokens\":0") != std::string::npos ||
-                    response.find("\"text\":\"\"") != std::string::npos) {
-                    last_error_ = ErrorCode::AI_API_EMPTY_RESPONSE;
-                    LOG_INFO("[AI] API returned empty response (content filtered or model issue)");
-                    return "";
+            std::string text;
+            bool has_thinking = false;
+            size_t content_start = response.find("\"content\":[");
+            size_t pos = content_start;
+            while ((pos = response.find("\"type\":", pos)) != std::string::npos) {
+                size_t type_start = response.find("\"", pos + 7);
+                if (type_start == std::string::npos) break;
+                size_t type_end = response.find("\"", type_start + 1);
+                if (type_end == std::string::npos) break;
+
+                std::string block_type = response.substr(type_start + 1, type_end - type_start - 1);
+                if (block_type == "text") {
+                    size_t tpos = response.find("\"text\":\"", pos);
+                    if (tpos != std::string::npos && tpos < pos + 300) {
+                        size_t tstart = tpos + 8;
+                        size_t tend = tstart;
+                        while (tend < response.length()) {
+                            if (response[tend] == '\"' && response[tend - 1] != '\\') break;
+                            tend++;
+                        }
+                        if (tend > tstart) {
+                            std::string raw = response.substr(tstart, tend - tstart);
+                            text += unescapeJsonString(raw);
+                        }
+                    }
+                } else if (block_type == "thinking") {
+                    size_t thpos = response.find("\"thinking\":\"", pos);
+                    if (thpos != std::string::npos && thpos < pos + 300) {
+                        has_thinking = true;
+                    }
                 }
+
+                pos = type_end + 1;
+            }
+
+            if (!text.empty()) {
+                LOG_INFO("[AI] Messages format parsed, content length: " + std::to_string(text.length()));
+                return text;
+            }
+
+            if (has_thinking ||
+                response.find("\"output_tokens\":0") != std::string::npos ||
+                response.find("\"text\":\"\"") != std::string::npos) {
+                last_error_ = ErrorCode::AI_API_EMPTY_RESPONSE;
+                LOG_INFO("[AI] API returned empty response (content filtered or model issue)");
+                return "";
             }
         }
         
@@ -2016,7 +2637,14 @@ public:
         
         if (response.front() == '{') {
             last_error_ = ErrorCode::AI_API_UNKNOWN_FORMAT;
-            LOG_ERROR(ErrorSystem::instance().formatError(last_error_, response.substr(0, 200)));
+            std::string fmt = getRequestFormat();
+            std::string model_id = getCurrentModel();
+            std::string model_name = getCurrentModelName();
+            std::string head = "model=" + model_id + " (" + model_name + ") format=" + fmt + " resp=";
+            size_t max_len = 800;
+            size_t clip_len = response.size() < max_len ? response.size() : max_len;
+            std::string snippet = response.substr(0, clip_len);
+            LOG_ERROR(ErrorSystem::instance().formatError(last_error_, head + snippet));
             return "";
         }
         
@@ -2100,11 +2728,27 @@ public:
     using SetTitleFunc = std::function<void(int64_t, int64_t, const std::string&)>;
     SetTitleFunc set_title_func_;
     
+    using MuteFunc = std::function<void(int64_t, int64_t, int64_t)>;
+    MuteFunc set_mute_func_;
+    
+    using KickFunc = std::function<void(int64_t, int64_t)>;
+    KickFunc set_kick_func_;
+    
+    using ForwardMsgFunc = std::function<void(int64_t, const std::vector<std::tuple<std::string, int64_t, std::string>>&)>;
+    ForwardMsgFunc set_forward_func_;
+    
+    using FileSendFunc = std::function<void(int64_t, const std::string&, const std::string&)>;
+    FileSendFunc set_file_func_;
+
+    using NudgeFunc = std::function<void(int64_t, int64_t)>;
+    NudgeFunc set_nudge_func_;
+    
     std::string api_url_;
     std::string api_key_;
     std::string system_prompt_;
     std::string current_model_;
     std::map<std::string, ModelConfig> models_;
+    int64_t bot_id_ = 0;
     ErrorCode last_error_ = ErrorCode::SUCCESS;
     std::string last_error_detail_;
     

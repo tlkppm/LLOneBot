@@ -1,5 +1,6 @@
 #include "bot/Bot.h"
 #include "core/Logger.h"
+#include "core/ErrorCodes.h"
 #include <iostream>
 #include <csignal>
 
@@ -45,17 +46,18 @@ int main(int argc, char* argv[]) {
     std::signal(SIGINT, signalHandler);
     std::signal(SIGTERM, signalHandler);
     
-    std::cout << R"(
-  _     _____ _   _ ____   ___ _____ 
- | |   / ____| | | |  _ \ / _ \_   _|
- | |  | |    | |_| | |_) | | | || |  
- | |  | |    |  _  |  _ <| |_| || |  
- | |__| |____| | | | |_) | |_| || |_ 
- |_____\_____|_| |_|____/ \___/_____|
-                                     
-    QQ Bot Framework v1.0.0
-    OneBot 11 Protocol Support
-)" << std::endl;
+    std::cout
+        << "\n"
+        << "  _     _____ _   _ ____   ___ _____ \n"
+        << " | |   / ____| | | |  _ \\/ _ \\_   _|\n"
+        << " | |  | |    | |_| | |_) | | | || |  \n"
+        << " | |  | |    |  _  |  _ <| |_| || |  \n"
+        << " | |__| |____| | | | |_) | |_| || |_ \n"
+        << " |_____\\_____|_| |_|____/ \\___/_____|\n"
+        << "                                     \n"
+        << "    QQ Bot Framework v" << FRAMEWORK_VERSION << "\n"
+        << "    OneBot 11 Protocol Support\n"
+        << std::endl;
     
     std::string config_path = "config.ini";
     if (argc > 1) {
@@ -85,9 +87,6 @@ int main(int argc, char* argv[]) {
     }
     
     bot.stop();
-    
-    std::cout << "Press Enter to exit..." << std::endl;
-    std::cin.get();
-    
+
     return 0;
 }

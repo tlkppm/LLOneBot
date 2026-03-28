@@ -33,8 +33,26 @@ public:
     void setContext(PluginContext* context) {
         context_ = context;
     }
+
+    void setPluginDirectory(const std::string& directory) {
+        plugin_directory_ = std::filesystem::path(directory).lexically_normal().string();
+    }
+
+    void setDisabledPlugins(const std::vector<std::string>& disabled_plugins) {
+        disabled_plugin_names_.clear();
+        for (const auto& plugin_name : disabled_plugins) {
+            if (!plugin_name.empty()) {
+                disabled_plugin_names_.insert(plugin_name);
+            }
+        }
+
+        for (auto& [plugin_name, plugin] : plugins_) {
+            applyPluginEnabledState(plugin_name, plugin.get());
+        }
+    }
     
     bool loadPluginsFromDirectory(const std::string& directory, bool enable_python = true, bool enable_native = true) {
+        setPluginDirectory(directory);
         if (!std::filesystem::exists(directory)) {
             std::filesystem::create_directories(directory);
             return true;
@@ -70,8 +88,10 @@ public:
             LOG_WARN("Python interpreter not initialized, skipping plugin: " + path);
             return false;
         }
+
+        std::string normalized_path = std::filesystem::path(path).lexically_normal().string();
         
-        auto plugin = std::make_unique<PythonPlugin>(path);
+        auto plugin = std::make_unique<PythonPlugin>(normalized_path);
         auto pre_info = plugin->getInfo();
         
         if (isPluginLoaded(pre_info.name)) {
@@ -94,7 +114,11 @@ public:
         
         LOG_INFO("[Plugin] Loaded: " + info.name + " v" + info.version + " by " + info.author);
         plugins_[info.name] = std::move(plugin);
-        loaded_plugin_paths_.insert(path);
+        applyPluginEnabledState(info.name, plugins_[info.name].get());
+        loaded_plugin_paths_.insert(normalized_path);
+        if (std::filesystem::exists(normalized_path)) {
+            plugin_mod_times_[normalized_path] = std::filesystem::last_write_time(normalized_path);
+        }
         sortPluginsByPriority();
         return true;
     }
@@ -176,6 +200,7 @@ public:
         native_plugins_[info.name] = data;
         
         plugins_[info.name] = std::unique_ptr<IPlugin>(raw_plugin);
+        applyPluginEnabledState(info.name, plugins_[info.name].get());
         return true;
     }
     
@@ -221,6 +246,8 @@ public:
         plugins_.clear();
         native_plugins_.clear();
         sorted_plugins_.clear();
+        loaded_plugin_paths_.clear();
+        plugin_mod_times_.clear();
     }
     
     bool enablePlugin(const std::string& name) {
@@ -269,6 +296,7 @@ public:
         
         LOG_INFO("[Plugin] Builtin loaded: " + info.name + " v" + info.version);
         plugins_[info.name] = std::move(plugin);
+        applyPluginEnabledState(info.name, plugins_[info.name].get());
         sortPluginsByPriority();
         return true;
     }
@@ -278,9 +306,30 @@ public:
         if (it == plugins_.end()) return false;
         return it->second->isEnabled();
     }
+
+    bool reloadPlugin(const std::string& name) {
+        auto it = plugins_.find(name);
+        if (it == plugins_.end()) return false;
+
+        auto* python_plugin = dynamic_cast<PythonPlugin*>(it->second.get());
+        if (!python_plugin) return false;
+
+        std::string script_path = python_plugin->getScriptPath();
+        if (script_path.empty() || !std::filesystem::exists(script_path)) return false;
+        if (!unloadPlugin(name)) return false;
+
+        bool loaded = loadPythonPlugin(script_path);
+        if (loaded) {
+            plugin_mod_times_[std::filesystem::path(script_path).lexically_normal().string()] =
+                std::filesystem::last_write_time(script_path);
+        }
+        return loaded;
+    }
     
     void reloadPythonPlugins() {
-        std::string plugins_dir = "plugins";
+        std::filesystem::path plugins_dir = plugin_directory_.empty()
+            ? std::filesystem::path("plugins")
+            : std::filesystem::path(plugin_directory_);
         if (!std::filesystem::exists(plugins_dir)) return;
         
         for (const auto& entry : std::filesystem::directory_iterator(plugins_dir)) {
@@ -290,17 +339,19 @@ public:
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
             
             if (ext == ".py") {
-                std::string path = entry.path().string();
+                std::string path = entry.path().lexically_normal().string();
                 std::string name = entry.path().stem().string();
                 
-                if (name.front() == '_') continue;
+                if (name.empty() || name.front() == '_') continue;
                 
                 auto current_mod_time = std::filesystem::last_write_time(entry.path());
                 auto it = plugin_mod_times_.find(path);
                 
                 bool need_reload = false;
+                bool is_new_plugin = false;
                 if (it == plugin_mod_times_.end()) {
                     need_reload = true;
+                    is_new_plugin = true;
                     LOG_INFO("[HotReload] New plugin detected: " + name);
                 } else if (it->second != current_mod_time) {
                     need_reload = true;
@@ -308,10 +359,19 @@ public:
                 }
                 
                 if (need_reload) {
-                    if (reloadSinglePythonPlugin(path, name)) {
+                    bool success = false;
+                    if (is_new_plugin) {
+                        success = loadPythonPlugin(path);
+                    } else {
+                        success = reloadPythonPluginByPath(path);
+                    }
+
+                    if (success) {
                         plugin_mod_times_[path] = current_mod_time;
                         loaded_plugin_paths_.insert(path);
                         LOG_INFO("[HotReload] Successfully reloaded: " + name);
+                    } else {
+                        LOG_ERROR("[HotReload] Failed to reload: " + name);
                     }
                 }
             }
@@ -378,6 +438,24 @@ public:
         
         py.executeString(exec_code);
         return true;
+    }
+
+    bool reloadPythonPluginByPath(const std::string& path) {
+        std::string normalized_path = std::filesystem::path(path).lexically_normal().string();
+
+        for (const auto& [plugin_name, plugin] : plugins_) {
+            auto* python_plugin = dynamic_cast<PythonPlugin*>(plugin.get());
+            if (!python_plugin) {
+                continue;
+            }
+
+            std::string script_path = std::filesystem::path(python_plugin->getScriptPath()).lexically_normal().string();
+            if (script_path == normalized_path) {
+                return reloadPlugin(plugin_name);
+            }
+        }
+
+        return loadPythonPlugin(normalized_path);
     }
     
     void startHotReload(int interval_seconds = 5) {
@@ -492,11 +570,31 @@ private:
     std::map<std::string, NativePluginData> native_plugins_;
     std::vector<IPlugin*> sorted_plugins_;
     PluginContext* context_ = nullptr;
+    std::string plugin_directory_ = "plugins";
+    std::set<std::string> disabled_plugin_names_;
     
     std::atomic<bool> hot_reload_running_{false};
     std::thread hot_reload_thread_;
     std::set<std::string> loaded_plugin_paths_;
     std::map<std::string, std::filesystem::file_time_type> plugin_mod_times_;
+
+    void applyPluginEnabledState(const std::string& plugin_name, IPlugin* plugin) {
+        if (!plugin) return;
+
+        bool should_disable = disabled_plugin_names_.find(plugin_name) != disabled_plugin_names_.end();
+        if (should_disable && plugin->isEnabled()) {
+            plugin->setEnabled(false);
+            plugin->onDisable();
+            LOG_INFO("[Plugin] Disabled by config: " + plugin_name);
+            return;
+        }
+
+        if (!should_disable && !plugin->isEnabled()) {
+            plugin->setEnabled(true);
+            plugin->onEnable();
+            LOG_INFO("[Plugin] Enabled by config: " + plugin_name);
+        }
+    }
 };
 
 }

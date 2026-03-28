@@ -24,6 +24,8 @@
 #include <thread>
 #include <mutex>
 #include <atomic>
+#include <queue>
+#include <condition_variable>
 #include <random>
 #include <sstream>
 #include <iomanip>
@@ -44,10 +46,20 @@ public:
         WSADATA wsa_data;
         WSAStartup(MAKEWORD(2, 2), &wsa_data);
 #endif
+        callback_running_ = true;
+        callback_thread_ = std::thread(&WebSocketClient::messageDispatchLoop, this);
     }
     
     ~WebSocketClient() {
         disconnect();
+        {
+            std::lock_guard<std::mutex> lock(callback_mutex_);
+            callback_running_ = false;
+        }
+        callback_cv_.notify_all();
+        if (callback_thread_.joinable()) {
+            callback_thread_.join();
+        }
 #ifdef _WIN32
         WSACleanup();
 #endif
@@ -222,10 +234,7 @@ private:
                     }
                 } else if (opcode == 0x01 || opcode == 0x02) {
                     if (on_message_) {
-                        std::string msg_copy = payload;
-                        std::thread([this, msg_copy]() {
-                            on_message_(msg_copy);
-                        }).detach();
+                        enqueueMessage(payload);
                     }
                 }
             }
@@ -335,11 +344,53 @@ private:
         }
         return result;
     }
+
+    void enqueueMessage(const std::string& message) {
+        {
+            std::lock_guard<std::mutex> lock(callback_mutex_);
+            callback_queue_.push(message);
+        }
+        callback_cv_.notify_one();
+    }
+
+    void messageDispatchLoop() {
+        while (true) {
+            std::string message;
+            {
+                std::unique_lock<std::mutex> lock(callback_mutex_);
+                callback_cv_.wait(lock, [this] {
+                    return !callback_running_ || !callback_queue_.empty();
+                });
+
+                if (!callback_running_ && callback_queue_.empty()) {
+                    return;
+                }
+
+                message = std::move(callback_queue_.front());
+                callback_queue_.pop();
+            }
+
+            try {
+                if (on_message_) {
+                    on_message_(message);
+                }
+            } catch (const std::exception& exception) {
+                LOG_ERROR("[WebSocket] Message callback error: " + std::string(exception.what()));
+            } catch (...) {
+                LOG_ERROR("[WebSocket] Message callback unknown error");
+            }
+        }
+    }
     
     std::atomic<bool> running_;
     SOCKET socket_;
     std::thread recv_thread_;
+    std::thread callback_thread_;
     mutable std::mutex send_mutex_;
+    std::mutex callback_mutex_;
+    std::condition_variable callback_cv_;
+    std::queue<std::string> callback_queue_;
+    std::atomic<bool> callback_running_{false};
     
     std::string host_;
     uint16_t port_;

@@ -51,6 +51,12 @@ Thumbs.db
 # Third-party plugins
 plugins/astrbot_plugin_touchi/
 
+# JMComic download cache
+data/jmcomic/
+
+# JMComic source (not needed at runtime)
+JMComic-Crawler-Python-master/
+
 # Temp
 *.tmp
 *.temp

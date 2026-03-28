@@ -320,7 +320,9 @@ private:
     
     void evictIfNeeded() {
         std::lock_guard<std::mutex> lock(mutex_);
-        while (stats_.total_bytes > max_size_bytes_ && !lru_list_.empty()) {
+        while (stats_.total_bytes.load() > 0 &&
+               static_cast<size_t>(stats_.total_bytes.load()) > max_size_bytes_ &&
+               !lru_list_.empty()) {
             evictOldest();
         }
     }

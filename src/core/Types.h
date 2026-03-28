@@ -9,6 +9,7 @@
 #include <memory>
 #include <functional>
 #include <chrono>
+#include <limits>
 
 namespace LCHBOT {
 
@@ -56,6 +57,31 @@ struct JsonValue {
     int64_t asInt() const { return std::get<int64_t>(value); }
     double asDouble() const { return std::get<double>(value); }
     const std::string& asString() const { return std::get<std::string>(value); }
+    int64_t toInt64(int64_t fallback = 0) const {
+        if (isInt()) return asInt();
+        if (isDouble()) {
+            double val = asDouble();
+            if (val > static_cast<double>(std::numeric_limits<int64_t>::max())) return std::numeric_limits<int64_t>::max();
+            if (val < static_cast<double>(std::numeric_limits<int64_t>::min())) return std::numeric_limits<int64_t>::min();
+            return static_cast<int64_t>(val);
+        }
+        if (isString()) {
+            const auto& text = asString();
+            if (text.empty()) return fallback;
+            try {
+                size_t idx = 0;
+                long long value = std::stoll(text, &idx, 10);
+                if (idx == text.size()) return static_cast<int64_t>(value);
+            } catch (const std::out_of_range&) {
+                return !text.empty() && text[0] == '-'
+                    ? std::numeric_limits<int64_t>::min()
+                    : std::numeric_limits<int64_t>::max();
+            } catch (...) {
+            }
+        }
+        if (isBool()) return asBool() ? 1 : 0;
+        return fallback;
+    }
     std::vector<JsonValue>& asArray() { return std::get<std::vector<JsonValue>>(value); }
     const std::vector<JsonValue>& asArray() const { return std::get<std::vector<JsonValue>>(value); }
     std::map<std::string, JsonValue>& asObject() { return std::get<std::map<std::string, JsonValue>>(value); }
@@ -132,7 +158,7 @@ struct Sender {
 };
 
 struct Message {
-    int32_t message_id = 0;
+    int64_t message_id = 0;
     MessageType message_type = MessageType::Private;
     int64_t user_id = 0;
     int64_t group_id = 0;
